@@ -28,10 +28,6 @@ export function titleUnreadCount(title: string): number {
   return m[1] ? Number(m[1]) : 1
 }
 
-export function titleHasUnread(title: string): boolean {
-  return titleUnreadCount(title) > 0
-}
-
 /** Strip a leading unread marker so it never leaks into the auto-derived Pod
  *  name (e.g. "(3) Discord" → "Discord"). */
 export function cleanTitle(title: string): string {

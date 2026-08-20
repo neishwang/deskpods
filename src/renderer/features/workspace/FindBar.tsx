@@ -67,7 +67,12 @@ export function FindBar(): React.JSX.Element {
           value={query}
           onChange={(e) => search(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
+            // Ctrl+F never reaches main while the chrome has focus, so the
+            // toggle has to be closed from here too.
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+              e.preventDefault()
+              closeFind()
+            } else if (e.key === 'Enter') {
               e.preventDefault()
               step(!e.shiftKey)
             } else if (e.key === 'Escape') {

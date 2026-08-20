@@ -98,7 +98,7 @@ function nearestZoomStep(factor: number): number {
 }
 
 /** Metadata a Pod reports about itself once its page loads. */
-export interface PodMeta {
+interface PodMeta {
   title?: string
   favicon?: string
 }

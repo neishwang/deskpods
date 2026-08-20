@@ -12,7 +12,7 @@ export function useCommands(): (command: UiCommand) => void {
     const store = usePodStore.getState()
     switch (command.type) {
       case 'find-in-page':
-        store.openFind()
+        store.toggleFind()
         break
       case 'add-pod-in-folder':
         store.setDialog({ type: 'add-pod', folderId: command.folderId })

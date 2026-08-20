@@ -246,5 +246,3 @@ export const IpcChannels = {
   /** main -> overlay window push: the zoom level to flash above the Pod. */
   zoomIndicator: 'ui:zoom'
 } as const
-
-export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

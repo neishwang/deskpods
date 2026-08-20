@@ -4,8 +4,6 @@ import { X } from 'lucide-react'
 import type * as React from 'react'
 
 export const Dialog = DialogPrimitive.Root
-export const DialogTrigger = DialogPrimitive.Trigger
-export const DialogClose = DialogPrimitive.Close
 
 function DialogOverlay({
   className,

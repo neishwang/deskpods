@@ -14,14 +14,13 @@ import type {
 import { create } from 'zustand'
 
 /** Which editing dialog (if any) is currently shown. */
-export type SidebarDialog =
+type SidebarDialog =
   | { type: 'add-pod'; folderId?: FolderId | null }
   | { type: 'rename-pod'; id: PodId }
   | { type: 'edit-pod-url'; id: PodId }
   | { type: 'folder-settings'; id: FolderId }
 
 interface PodStore extends AppState {
-  loaded: boolean
   dialog: SidebarDialog | null
   /** The find bar is showing under the active Pod. */
   findOpen: boolean
@@ -30,7 +29,7 @@ interface PodStore extends AppState {
   findToken: number
 
   setDialog: (dialog: SidebarDialog | null) => void
-  openFind: () => void
+  toggleFind: () => void
   closeFind: () => void
   load: () => Promise<void>
   setActive: (id: PodId) => Promise<void>
@@ -63,7 +62,11 @@ export const usePodStore = create<PodStore>((set, get) => ({
 
   setDialog: (dialog) => set({ dialog }),
 
-  openFind: () => set({ findOpen: true, findToken: get().findToken + 1 }),
+  /** Ctrl+F opens the bar, and closes it when it is already open. */
+  toggleFind: () => {
+    if (get().findOpen) get().closeFind()
+    else set({ findOpen: true, findToken: get().findToken + 1 })
+  },
 
   closeFind: () => {
     set({ findOpen: false })
@@ -72,7 +75,7 @@ export const usePodStore = create<PodStore>((set, get) => ({
 
   load: async () => {
     const state = await ipc.getState()
-    set({ ...state, loaded: true })
+    set(state)
     if (state.activePodId) await ipc.activatePod(state.activePodId)
   },
 
@@ -189,7 +192,7 @@ function dropEmptyFolders(pods: Pod[], folders: Folder[]): Folder[] {
 const byOrder = <T extends { order: number }>(a: T, b: T) => a.order - b.order
 
 /** One entry of the root level, where Pods and folders share a single order. */
-export interface RootEntry {
+interface RootEntry {
   kind: 'pod' | 'folder'
   id: string
   key: string
