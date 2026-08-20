@@ -213,6 +213,13 @@ export function registerIpc(
       pod.settings = { ...pod.settings, zoom }
     }
     persist()
+
+    // Flash the level above the page, the way a browser does. It goes to the
+    // overlay window because a native Pod view paints over the chrome.
+    if (id === pods.activePodId && overlay && !overlay.isDestroyed()) {
+      showOverlay()
+      overlay.webContents.send(IpcChannels.zoomIndicator, Math.round(zoom * 100))
+    }
   }
 
   // Mouse back/forward buttons drive the active Pod's history, like a browser.
@@ -428,6 +435,7 @@ export function registerIpc(
   ipcMain.handle(IpcChannels.showPodMenu, (_e, id: PodId): void => {
     const pod = state.pods.find((p) => p.id === id)
     if (!pod) return
+    const zoom = pod.settings?.zoom
 
     const moveTargets: MenuItemConstructorOptions[] = [
       {
@@ -462,6 +470,24 @@ export function registerIpc(
       { type: 'separator' },
       { label: 'Move to', submenu: moveTargets },
       { type: 'separator' },
+      // Only worth showing when the Pod is actually zoomed.
+      ...(zoom && zoom !== 1
+        ? [
+            {
+              label: `Reset Zoom (${Math.round(zoom * 100)}%)`,
+              click: () => {
+                pods.resetZoom(id)
+                // A suspended Pod has no view to reset, so drop the saved
+                // factor here as well.
+                if (pod.settings?.zoom) {
+                  pod.settings = undefined
+                  persist()
+                }
+              }
+            },
+            { type: 'separator' } as MenuItemConstructorOptions
+          ]
+        : []),
       {
         // Free the Pod's renderer/GPU cost now; its session stays on disk and
         // the next click reloads it. Only meaningful when a live view exists.

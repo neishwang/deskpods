@@ -104,8 +104,11 @@ export interface CreatePodInput {
 export interface FindOptions {
   /** Search downwards (default) or upwards. */
   forward?: boolean
-  /** False starts a new search, true jumps to the next match of the same text. */
+  /** True jumps to the next match of the text already being searched; leave it
+   *  unset to start a new search. */
   findNext?: boolean
+  /** Distinguish "Polski" from "polski". */
+  matchCase?: boolean
 }
 
 /** Fields of a Pod the user can edit directly. */
@@ -187,6 +190,9 @@ export interface DeskPodsApi {
   /** Overlay window only: receive themed toasts to display above the Pods.
    *  Returns an unsubscribe function. */
   onToast(listener: (toast: OverlayToast) => void): () => void
+  /** Overlay window only: receive the active Pod's zoom level (in percent) to
+   *  flash above the page. Returns an unsubscribe function. */
+  onZoomIndicator(listener: (percent: number) => void): () => void
   /** Overlay window only: report that no tooltip/toast is visible any more, so
    *  main can hide the overlay window (a hidden window costs the compositor
    *  nothing; a visible transparent one is blended every frame). */
@@ -236,7 +242,9 @@ export const IpcChannels = {
   /** main -> overlay window push. */
   tooltip: 'ui:tooltip',
   /** main -> overlay window push: a themed notification toast. */
-  overlayToast: 'ui:toast'
+  overlayToast: 'ui:toast',
+  /** main -> overlay window push: the zoom level to flash above the Pod. */
+  zoomIndicator: 'ui:zoom'
 } as const
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

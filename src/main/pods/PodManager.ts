@@ -119,6 +119,9 @@ export class PodManager {
   private bounds: Rect = { x: 0, y: 0, width: 0, height: 0 }
   /** When true, the active view is hidden so an HTML overlay (dialog) shows. */
   private overlay = false
+  /** Latest in-page search request, so late answers from superseded ones can be
+   *  dropped. Request ids are per web contents, hence the Pod they belong to. */
+  private findRequest: { podId: PodId | null; id: number } = { podId: null, id: 0 }
 
   /** Set by the IPC layer to receive title/favicon updates per Pod. */
   onMeta?: (id: PodId, meta: PodMeta) => void
@@ -216,6 +219,9 @@ export class PodManager {
 
     // Match counts for the find bar; the highlighting itself is Chromium's.
     wc.on('found-in-page', (_e, result) => {
+      // Answers are async: a superseded request can land after a newer one and
+      // would report the stale (often zero) count.
+      if (this.findRequest.podId === pod.id && result.requestId < this.findRequest.id) return
       this.onFindResult?.(pod.id, {
         matches: result.matches,
         activeMatch: result.activeMatchOrdinal
@@ -398,21 +404,43 @@ export class PodManager {
     this.onZoom?.(id, factor)
   }
 
-  /** Run Chromium's in-page search on the active Pod. */
+  /**
+   * Run Chromium's in-page search on the active Pod.
+   *
+   * `findNext` is handed straight to Chromium's `new_session` flag WITHOUT being
+   * inverted, so passing it as `false` — the value Electron documents as "first
+   * request" — actually means "carry on the previous session" and the call
+   * silently does nothing with the new text. A fresh search must omit the key
+   * altogether; only stepping between matches sets it.
+   */
   find(text: string, options?: FindOptions): void {
-    const wc = this.activeId ? this.views.get(this.activeId)?.webContents : undefined
-    if (!wc || wc.isDestroyed()) return
+    const podId = this.activeId
+    const wc = podId ? this.views.get(podId)?.webContents : undefined
+    if (!podId || !wc || wc.isDestroyed()) return
     if (!text) {
-      wc.stopFindInPage('clearSelection')
+      this.stopFind()
       return
     }
-    wc.findInPage(text, { forward: options?.forward ?? true, findNext: options?.findNext ?? false })
+
+    const findOptions: Electron.FindInPageOptions = { forward: options?.forward ?? true }
+    if (options?.findNext) findOptions.findNext = true
+    if (options?.matchCase) findOptions.matchCase = true
+
+    if (this.findRequest.podId !== podId) this.findRequest = { podId, id: 0 }
+    this.findRequest.id = wc.findInPage(text, findOptions)
   }
 
   /** Drop the search highlighting on the active Pod. */
   stopFind(): void {
     const wc = this.activeId ? this.views.get(this.activeId)?.webContents : undefined
+    this.findRequest = { podId: null, id: 0 }
     if (wc && !wc.isDestroyed()) wc.stopFindInPage('clearSelection')
+  }
+
+  /** Back to 100%. No-op when the Pod has no live view; the persisted factor is
+   *  cleared by the IPC layer either way. */
+  resetZoom(id: PodId): void {
+    this.stepZoom(id, 0)
   }
 
   /** History navigation for the mouse's back/forward buttons. */

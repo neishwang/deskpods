@@ -20,6 +20,7 @@ export function FindBar(): React.JSX.Element {
   const closeFind = usePodStore((s) => s.closeFind)
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
+  const [matchCase, setMatchCase] = useState(false)
   const [result, setResult] = useState<FindResult>(EMPTY)
 
   // Focus on open, and again on every Ctrl+F: pressing it while the bar is
@@ -33,17 +34,23 @@ export function FindBar(): React.JSX.Element {
   useEffect(() => ipc.onFindResult(setResult), [])
 
   // Search as you type, like Chrome's incremental find.
-  const search = (text: string) => {
+  const search = (text: string, caseSensitive = matchCase) => {
     setQuery(text)
     if (!text) setResult(EMPTY)
-    void ipc.findInPage(text)
+    void ipc.findInPage(text, { matchCase: caseSensitive })
   }
 
   /** Jump to the next/previous match of the text already being searched. */
   const step = (forward: boolean) => {
     if (!query) return
-    void ipc.findInPage(query, { forward, findNext: true })
+    void ipc.findInPage(query, { forward, findNext: true, matchCase })
     inputRef.current?.focus()
+  }
+
+  /** Toggling the case rule restarts the search on the same text. */
+  const toggleMatchCase = (checked: boolean) => {
+    setMatchCase(checked)
+    if (query) search(query, checked)
   }
 
   const counter = query
@@ -80,6 +87,16 @@ export function FindBar(): React.JSX.Element {
         >
           {counter}
         </span>
+
+        <label className="flex select-none items-center gap-1.5 px-2 text-xs text-[var(--color-muted)] hover:text-white">
+          <input
+            type="checkbox"
+            checked={matchCase}
+            onChange={(e) => toggleMatchCase(e.target.checked)}
+            className="h-3.5 w-3.5 accent-[var(--color-accent)]"
+          />
+          Match case
+        </label>
 
         <FindButton label="Previous match" onClick={() => step(false)} disabled={!result.matches}>
           <ChevronUp className="h-4 w-4" />

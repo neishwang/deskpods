@@ -61,6 +61,36 @@
         border-radius: 1px;
       }
 
+      /* Zoom level, flashed centre-top while the user zooms a Pod. */
+      #zoom {
+        position: fixed;
+        top: 14px;
+        left: 50%;
+        padding: 7px 14px;
+        border-radius: 999px;
+        background: #1e293b;
+        color: #f8fafc;
+        font-size: 13px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        white-space: nowrap;
+        box-shadow:
+          0 4px 16px rgba(0, 0, 0, 0.45),
+          0 0 0 1px #334155;
+        transform: translateX(-50%) translateY(-8px);
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 120ms ease,
+          transform 120ms ease;
+      }
+
+      #zoom.visible {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+
       /* Themed notification toasts, stacked top-right above the Pods. */
       #toasts {
         position: fixed;
@@ -124,6 +154,7 @@
   </head>
   <body>
     <div id="tooltip"></div>
+    <div id="zoom"></div>
     <div id="toasts"></div>
     <script type="module" src="/src/overlay/index.ts"></script>
   </body>

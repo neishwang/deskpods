@@ -1,13 +1,14 @@
 /**
- * Overlay renderer: a tiny, dependency-free layer that draws tooltips and
- * themed notification toasts above the Pods' native web views. It only listens
- * for payloads pushed by main.
+ * Overlay renderer: a tiny, dependency-free layer that draws tooltips, the zoom
+ * indicator and themed notification toasts above the Pods' native web views. It
+ * only listens for payloads pushed by main.
  *
  * Main shows the overlay window when it sends content; this side reports back
  * (overlayIdle) once nothing is visible any more, so main can hide the window
  * and the compositor stops blending a transparent full-size surface.
  */
 let tooltipVisible = false
+let zoomVisible = false
 let toastCount = 0
 let idleTimer: number | undefined
 
@@ -16,7 +17,7 @@ let idleTimer: number | undefined
 function scheduleIdleCheck(): void {
   clearTimeout(idleTimer)
   idleTimer = window.setTimeout(() => {
-    if (!tooltipVisible && toastCount === 0) window.deskpods.overlayIdle()
+    if (!tooltipVisible && !zoomVisible && toastCount === 0) window.deskpods.overlayIdle()
   }, 250)
 }
 
@@ -35,6 +36,28 @@ if (tooltip) {
     tooltip.style.top = `${payload.y}px`
     tooltip.classList.add('visible')
     tooltipVisible = true
+  })
+}
+
+const zoom = document.getElementById('zoom')
+
+if (zoom) {
+  // Long enough to read while stepping through zoom levels, short enough not to
+  // sit on the page: each new step restarts the countdown.
+  const ZOOM_MS = 1400
+  let hideTimer: number | undefined
+
+  window.deskpods.onZoomIndicator((percent) => {
+    zoom.textContent = `${percent}%`
+    zoom.classList.add('visible')
+    zoomVisible = true
+
+    clearTimeout(hideTimer)
+    hideTimer = window.setTimeout(() => {
+      zoom.classList.remove('visible')
+      zoomVisible = false
+      scheduleIdleCheck()
+    }, ZOOM_MS)
   })
 }
 

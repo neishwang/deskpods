@@ -61,6 +61,11 @@ const api: DeskPodsApi = {
     ipcRenderer.on(IpcChannels.overlayToast, handler)
     return () => ipcRenderer.removeListener(IpcChannels.overlayToast, handler)
   },
+  onZoomIndicator: (listener: (percent: number) => void) => {
+    const handler = (_e: IpcRendererEvent, percent: number) => listener(percent)
+    ipcRenderer.on(IpcChannels.zoomIndicator, handler)
+    return () => ipcRenderer.removeListener(IpcChannels.zoomIndicator, handler)
+  },
   onPodUpdated: (listener: (pod: Pod) => void) => {
     const handler = (_e: IpcRendererEvent, pod: Pod) => listener(pod)
     ipcRenderer.on(IpcChannels.podUpdated, handler)
