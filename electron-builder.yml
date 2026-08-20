@@ -1,0 +1,19 @@
+appId: com.deskpods.app
+productName: DeskPods
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+win:
+  icon: build/icon.ico
+  target:
+    # A self-contained folder (fast start): unzip anywhere — e.g. M:\ — run
+    # DeskPods.exe, and all data lives in a `data/` folder right next to it.
+    - target: zip
+    # A single portable .exe: put it anywhere and its data folder appears beside
+    # it (uses PORTABLE_EXECUTABLE_DIR). Slower start (re-extracts each launch).
+    - target: portable
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}

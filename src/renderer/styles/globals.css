@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* "Productivity & Focus" palette. DeskPods is dark-only by design. */
+@theme {
+  --color-bg: #0f172a; /* Workspace background — deep slate */
+  --color-surface: #1e293b; /* Sidebar / menus */
+  --color-border: #334155; /* Borders & separators */
+  --color-muted: #94a3b8; /* Secondary text / inactive icons */
+  --color-accent: #2563eb; /* Active Pod / focus — royal blue */
+  --color-text: #f8fafc; /* Primary text — soft off-white */
+  --color-white: #f8fafc; /* Redefine the `white` utility to the soft white */
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Tailwind v4 no longer sets cursor:pointer on buttons by default. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
