@@ -106,6 +106,10 @@
       .toast {
         box-sizing: border-box;
         width: 100%;
+        /* Clickable: a click dismisses it. Main only lets mouse events reach
+           the overlay while the cursor is actually over one of these. */
+        pointer-events: auto;
+        cursor: pointer;
         padding: 10px 12px;
         border-radius: 10px;
         border: 1px solid #334155;
@@ -123,6 +127,15 @@
       .toast.visible {
         opacity: 1;
         transform: translateX(0);
+      }
+
+      .toast:hover {
+        border-color: #475569;
+      }
+
+      /* On the way out it must stop swallowing clicks. */
+      .toast.leaving {
+        pointer-events: none;
       }
 
       .toast .pod {

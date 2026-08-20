@@ -5,6 +5,7 @@ import { isValidArgs, resolveWorkingDirectory, runGit } from '@main/git'
 import { cleanTitle, setTaskbarBadge, titleUnreadCount } from '@main/notifications'
 import { saveState } from '@main/persistence/store'
 import type { PodManager } from '@main/pods/PodManager'
+import { createHitAreaTracker } from '@main/windows/overlayWindow'
 import {
   type AppState,
   type CreatePodInput,
@@ -306,7 +307,12 @@ export function registerIpc(
   const showOverlay = () => {
     if (overlay && !overlay.isDestroyed() && !overlay.isVisible()) overlay.showInactive()
   }
+  // Toasts are clickable; everything else in the overlay stays click-through.
+  const setHitAreas = overlay ? createHitAreaTracker(overlay) : () => {}
+  ipcMain.on(IpcChannels.overlayHitAreas, (_e, areas: Rect[]) => setHitAreas(areas))
+
   ipcMain.on(IpcChannels.overlayIdle, () => {
+    setHitAreas([])
     if (overlay && !overlay.isDestroyed()) overlay.hide()
   })
 

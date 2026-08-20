@@ -59,6 +59,7 @@ const api: DeskPodsApi = {
     return () => ipcRenderer.removeListener(IpcChannels.tooltip, handler)
   },
   overlayIdle: () => ipcRenderer.send(IpcChannels.overlayIdle),
+  reportHitAreas: (areas: Rect[]) => ipcRenderer.send(IpcChannels.overlayHitAreas, areas),
   onToast: (listener: (toast: OverlayToast) => void) => {
     const handler = (_e: IpcRendererEvent, toast: OverlayToast) => listener(toast)
     ipcRenderer.on(IpcChannels.overlayToast, handler)

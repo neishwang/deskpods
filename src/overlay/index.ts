@@ -67,9 +67,25 @@ if (toasts) {
   const TOAST_MS = 6000
   const MAX_TOASTS = 4
 
+  /** Tell main which rectangles must receive clicks. Everything else in the
+   *  overlay stays click-through, so the Pod underneath keeps the mouse. */
+  const reportToastAreas = () => {
+    const areas = [...toasts.querySelectorAll('.toast:not(.leaving)')].map((el) => {
+      const r = el.getBoundingClientRect()
+      return {
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        width: Math.round(r.width),
+        height: Math.round(r.height)
+      }
+    })
+    window.deskpods.reportHitAreas(areas)
+  }
+
   window.deskpods.onToast((toast) => {
     const el = document.createElement('div')
     el.className = 'toast'
+    el.title = 'Click to dismiss'
 
     const pod = document.createElement('div')
     pod.className = 'pod'
@@ -97,6 +113,7 @@ if (toasts) {
       removed = true
       el.remove()
       toastCount--
+      reportToastAreas()
       scheduleIdleCheck()
     }
     ;(el as HTMLElement & { __remove?: () => void }).__remove = remove
@@ -110,14 +127,26 @@ if (toasts) {
       else oldest.remove()
     }
 
-    // Next frame so the enter transition runs.
-    requestAnimationFrame(() => el.classList.add('visible'))
+    // Next frame so the enter transition runs, and so the rectangle reported to
+    // main is the laid-out one.
+    requestAnimationFrame(() => {
+      el.classList.add('visible')
+      reportToastAreas()
+    })
 
     const dismiss = () => {
+      // `leaving` drops it from the clickable regions straight away: it is
+      // still on screen for the fade, but must not eat clicks any more.
+      el.classList.add('leaving')
       el.classList.remove('visible')
+      reportToastAreas()
       el.addEventListener('transitionend', remove, { once: true })
       setTimeout(remove, 400) // fallback if no transitionend fires
     }
+
+    // Clicking a notification dismisses it.
+    el.addEventListener('click', dismiss)
+
     setTimeout(dismiss, TOAST_MS)
   })
 }

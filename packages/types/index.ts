@@ -236,6 +236,11 @@ export interface DeskPodsApi {
   /** Overlay window only: receive the active Pod's zoom level (in percent) to
    *  flash above the page. Returns an unsubscribe function. */
   onZoomIndicator(listener: (percent: number) => void): () => void
+  /** Overlay window only: report the regions that must receive mouse clicks
+   *  (currently the toasts, which are dismissed by clicking them). The overlay
+   *  is click-through everywhere else. Send an empty list once nothing is
+   *  clickable any more. */
+  reportHitAreas(areas: Rect[]): void
   /** Overlay window only: report that no tooltip/toast is visible any more, so
    *  main can hide the overlay window (a hidden window costs the compositor
    *  nothing; a visible transparent one is blended every frame). */
@@ -288,6 +293,8 @@ export const IpcChannels = {
   stateChanged: 'app:stateChanged',
   /** overlay window -> main: nothing visible, the overlay can be hidden. */
   overlayIdle: 'ui:overlay:idle',
+  /** overlay window -> main: regions of the overlay that must be clickable. */
+  overlayHitAreas: 'ui:overlay:hitAreas',
   /** main -> overlay window push. */
   tooltip: 'ui:tooltip',
   /** main -> overlay window push: a themed notification toast. */

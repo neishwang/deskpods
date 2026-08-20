@@ -1,5 +1,7 @@
 import { join } from 'node:path'
-import { BrowserWindow } from 'electron'
+import { isInsideAreas } from '@main/windows/hitTest'
+import type { Rect } from '@types'
+import { BrowserWindow, screen } from 'electron'
 
 /**
  * A transparent, click-through child window layered exactly over the main
@@ -66,5 +68,62 @@ export function createOverlayWindow(parent: BrowserWindow): BrowserWindow | null
     return overlay
   } catch {
     return null
+  }
+}
+
+/**
+ * Makes parts of the click-through overlay clickable — today the toasts, which
+ * are dismissed by clicking them.
+ *
+ * The overlay reports the regions that must receive clicks, and the cursor is
+ * sampled while any exists: mouse events are handed to the window only while
+ * the pointer sits inside one, so everything else still passes straight to the
+ * Pod underneath. Sampling rather than `setIgnoreMouseEvents(true, { forward:
+ * true })` on purpose — forwarding move events is what made the cursor flicker
+ * on Windows. The timer only runs while something is clickable (a few seconds
+ * per notification), never while idle.
+ *
+ * Returns the setter to call with the reported regions.
+ */
+export function createHitAreaTracker(overlay: BrowserWindow): (areas: Rect[]) => void {
+  const SAMPLE_MS = 50
+  let timer: NodeJS.Timeout | null = null
+  let areas: Rect[] = []
+  let clickable = false
+
+  const setClickable = (next: boolean) => {
+    if (next === clickable || overlay.isDestroyed()) return
+    clickable = next
+    overlay.setIgnoreMouseEvents(!next)
+  }
+
+  const stop = () => {
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+    setClickable(false)
+  }
+
+  const sample = () => {
+    if (overlay.isDestroyed()) {
+      stop()
+      return
+    }
+    const cursor = screen.getCursorScreenPoint()
+    const bounds = overlay.getContentBounds()
+    const x = cursor.x - bounds.x
+    const y = cursor.y - bounds.y
+    setClickable(isInsideAreas(areas, x, y))
+  }
+
+  return (next: Rect[]) => {
+    areas = Array.isArray(next) ? next : []
+    if (areas.length === 0) {
+      stop()
+      return
+    }
+    if (!timer) timer = setInterval(sample, SAMPLE_MS)
+    sample()
   }
 }
