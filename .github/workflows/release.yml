@@ -1,0 +1,58 @@
+# Builds and publishes a release whenever a v* tag is pushed:
+#
+#   1. set the version in package.json
+#   2. git tag -a v1.1.0 -m "..." && git push origin v1.1.0
+#
+# The checks run first, so a tag can never publish a build that does not pass.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # A tag that disagrees with package.json would ship mislabelled binaries.
+      - name: Check the tag matches package.json
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($version -ne $tag) {
+            throw "package.json is $version but the tag is $tag"
+          }
+          Write-Host "Releasing $version"
+
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
+
+      - run: bun run build:win
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Top level of dist/ only: the unpacked folder holds a second exe.
+          $assets = (Get-ChildItem -Path dist/*.exe, dist/*.zip -File).FullName
+          if (-not $assets) { throw "No artifact found in dist/" }
+          $assets | ForEach-Object { Write-Host "attaching $_" }
+          gh release create $env:GITHUB_REF_NAME `
+            --title "DeskPods $env:GITHUB_REF_NAME" `
+            --generate-notes `
+            $assets

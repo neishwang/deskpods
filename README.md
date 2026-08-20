@@ -128,6 +128,21 @@ permissions — is a single `deskpods/state.json`.
 
 Unread state is never persisted; it is derived at runtime.
 
+## Releases
+
+Pushing a `v*` tag builds Windows artifacts on CI and publishes them as a GitHub
+release — see [.github/workflows/release.yml](.github/workflows/release.yml).
+The workflow refuses to publish if the tag and `package.json` disagree, or if
+typecheck, lint or tests fail.
+
+```sh
+git tag -a v1.1.0 -m "…" && git push origin v1.1.0
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE). Fork it, ship it, do what you like with it.
+
 ## Development
 
 ```sh
