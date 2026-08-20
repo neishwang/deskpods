@@ -5,6 +5,11 @@ import { fileURLToPath } from 'node:url'
  * Generates the DeskPods app icon (build/icon.png @1024 + build/icon.ico).
  * Pure Node (no native deps): a rounded-square dark gradient with the brand's
  * stacked-"pods" motif in accent blue. Re-run with `bun run icon`.
+ *
+ * The .ico carries EVERY size Windows asks for (16 -> 256), each one rendered
+ * from the vector design at its native resolution instead of letting Windows
+ * downscale a single 256px bitmap — that downscale is what made the taskbar and
+ * title-bar icons look mushy.
  */
 import zlib from 'node:zlib'
 
@@ -141,27 +146,42 @@ function encodePng(S, raw) {
   ])
 }
 
-// --- ICO wrapping a 256×256 PNG (Windows Vista+ supports PNG-in-ICO) ---
-function encodeIco(png256) {
+// --- multi-resolution ICO, PNG-in-ICO for every entry (Windows Vista+) ---
+/** @param {Array<{ size: number, png: Buffer }>} images */
+function encodeIco(images) {
   const header = Buffer.alloc(6)
   header.writeUInt16LE(0, 0)
   header.writeUInt16LE(1, 2) // type: icon
-  header.writeUInt16LE(1, 4) // count
-  const entry = Buffer.alloc(16)
-  entry[0] = 0 // width 256 (0 means 256)
-  entry[1] = 0 // height 256
-  entry.writeUInt16LE(1, 4) // planes
-  entry.writeUInt16LE(32, 6) // bpp
-  entry.writeUInt32LE(png256.length, 8)
-  entry.writeUInt32LE(6 + 16, 12) // offset
-  return Buffer.concat([header, entry, png256])
+  header.writeUInt16LE(images.length, 4)
+
+  const directory = Buffer.alloc(16 * images.length)
+  let offset = header.length + directory.length
+  images.forEach(({ size, png }, i) => {
+    const at = i * 16
+    // 0 means 256 in the ICO directory; every other size fits in one byte.
+    directory[at] = size >= 256 ? 0 : size
+    directory[at + 1] = size >= 256 ? 0 : size
+    directory.writeUInt16LE(1, at + 4) // colour planes
+    directory.writeUInt16LE(32, at + 6) // bits per pixel
+    directory.writeUInt32LE(png.length, at + 8)
+    directory.writeUInt32LE(offset, at + 12)
+    offset += png.length
+  })
+
+  return Buffer.concat([header, directory, ...images.map((image) => image.png)])
 }
+
+// Windows picks the closest entry for each context: 16 (title bar), 24/32
+// (taskbar, alt-tab), 48 (desktop), 64/128/256 (Explorer large icons).
+const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 mkdirSync(OUT, { recursive: true })
 const png1024 = render(1024)
-const png256 = render(256)
+const images = ICO_SIZES.map((size) => ({ size, png: render(size) }))
+const ico = encodeIco(images)
 writeFileSync(join(OUT, 'icon.png'), png1024)
-writeFileSync(join(OUT, 'icon.ico'), encodeIco(png256))
+writeFileSync(join(OUT, 'icon.ico'), ico)
 console.log(
-  `Wrote build/icon.png (${png1024.length} B) and build/icon.ico (${png256.length + 22} B)`
+  `Wrote build/icon.png (${png1024.length} B) and build/icon.ico ` +
+    `(${ico.length} B, sizes ${ICO_SIZES.join('/')})`
 )
