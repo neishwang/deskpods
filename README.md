@@ -1,0 +1,157 @@
+# DeskPods
+
+**A lightweight home for your web apps.**
+
+DeskPods hosts web applications inside isolated Pods: a sidebar of icons, one app
+visible at a time, no tabs, no address bar, no browser chrome. It is not a
+browser — it is a dedicated place for the handful of tools that would otherwise
+monopolise a browser window: Gmail, Teams, Slack, Notion, Jira, an internal
+dashboard, anything that runs in Chromium.
+
+A Pod is a URL. There is no catalogue and no list of supported apps.
+
+## Isolation
+
+Each Pod owns a persistent Chromium partition — its own cookies, localStorage,
+IndexedDB, cache, service workers and credentials. Two Pods pointing at the same
+service are two independent accounts, and neither can see the other's session.
+
+When you *want* a shared login (one Google account across Gmail, Calendar and
+Drive), create the Pod as *linked*: it reuses the partition of an existing Pod
+on purpose. Folders never affect isolation — they are purely visual.
+
+## Getting started
+
+Requires [Bun](https://bun.sh) and, for the git bridge, `git` on your `PATH`.
+
+```sh
+bun install
+bun run dev
+```
+
+To produce a Windows build (a zip and a portable exe in `dist/`):
+
+```sh
+bun run build:win
+```
+
+## Using it
+
+**Pods.** The `+` button adds one from a URL; the name and favicon are detected
+from the page. Right-click a Pod for Rename, Edit URL, Move to, Suspend and
+Delete. Suspend frees a Pod's memory and GPU cost without touching its session —
+the next click reloads it.
+
+**Folders.** Drop a Pod onto another to create a folder holding both. Drag to
+reorder anywhere, right-click a folder for its name, colour and icon. A folder
+left empty disappears on its own.
+
+**Inside a page**, the browser reflexes work:
+
+| | |
+|---|---|
+| `F5`, `Ctrl+R` | reload (`Shift` variants ignore the cache) |
+| `Alt+←`, `Alt+→`, mouse side buttons | history |
+| `Ctrl+wheel`, `Ctrl++`, `Ctrl+-`, `Ctrl+0` | zoom, remembered per Pod, shown as a pill above the page |
+| `Ctrl+F` | find in page — again to close, `Enter` / `Shift+Enter` to step, with a *Match case* box |
+
+Right-click gives the usual page menu: spelling suggestions, undo/redo, image
+actions, opening or searching a selection in your real browser, back/forward and
+reload.
+
+**Notifications.** Web notifications are captured rather than shown by the OS:
+they become themed toasts above the page, and the taskbar icon carries the total
+unread count (read from page titles, e.g. `(3) Discord`).
+
+## Running git from a Pod
+
+A locally hosted app can drive git through DeskPods, so a page can offer buttons
+like *Commit* or *Push* without shipping a server. The bridge is exposed to the
+page as:
+
+```js
+const result = await window.__deskpods.git(['status', '--porcelain'])
+// { ok: true, code: 0, stdout: ' M README.md\n', stderr: '' }
+
+// Optional cwd, RELATIVE to the folder you granted:
+await window.__deskpods.git(['pull', '--rebase'], { cwd: 'services/api' })
+```
+
+`git(args, options?)` resolves with `{ ok, code, stdout, stderr, error? }`. A
+command that fails is a normal answer (`ok: false` with git's exit code and
+stderr); `error` is set only when DeskPods declined to run it at all, and the
+promise never rejects.
+
+### Permission
+
+The first call from a Pod raises a prompt naming the page and asking you to pick
+the folder git may work in. Your answer is stored **with that Pod**:
+
+- allow once, and every later call from that Pod runs without a prompt;
+- deny once, and every later call is refused without a prompt;
+- take it back from the Pod's right-click menu (*Revoke Git Access* /
+  *Reset Git Permission*), which makes the next call ask again;
+- delete the Pod and the answer goes with it — recreating a Pod on the same URL
+  asks from scratch, since permission follows the Pod, not the address.
+
+While the prompt is open, further calls from that Pod wait on the same dialog
+rather than stacking prompts.
+
+### What is enforced
+
+- **The folder.** Commands run in the folder you picked. `options.cwd` may only
+  be a relative path that stays inside it; absolute paths and anything climbing
+  out with `..` are refused.
+- **No shell.** Arguments are passed as an array straight to the process, so
+  `&&`, `|`, backticks and the rest are inert — they reach git as literal
+  arguments and it complains about them.
+- **No hanging.** Commands run with `GIT_TERMINAL_PROMPT=0` (a credential prompt
+  would have no terminal to appear on), no pager, a 120 s timeout and a 16 MB
+  output cap.
+
+### What is not
+
+**Every git command is allowed.** DeskPods does not filter subcommands or flags,
+and some git flags run other programs by design — `git -c core.pager=<program>`,
+`--upload-pack`, repository aliases. So any page loaded in an authorised Pod can
+execute arbitrary code on your machine, not merely touch a repository. Grant this
+to a Pod that loads an app you trust, keep such a Pod pointed at that app, and
+revoke it when you no longer need it.
+
+## Where your data lives
+
+In a packaged build DeskPods is portable: settings *and* every Pod's Chromium
+profile live in a `data/` folder next to the executable, so moving the app moves
+your sessions with it. In development they sit in the usual Electron `userData`
+directory. The app's own state — Pods, folders, per-Pod zoom and git
+permissions — is a single `deskpods/state.json`.
+
+Unread state is never persisted; it is derived at runtime.
+
+## Development
+
+```sh
+bun run dev          # electron-vite with HMR
+bun run typecheck    # both TS projects (main/preload and renderer)
+bun run lint         # biome
+bun run format       # biome, writing
+bun run test         # vitest
+bun run icon         # regenerate build/icon.png and the multi-size .ico
+bun run build:win    # zip + portable exe into dist/
+```
+
+Three bundles plus a shared package:
+
+- `packages/types` — domain models, the typed IPC surface and channel names.
+  No Electron import; every new channel starts here.
+- `src/main` — owns all state and all web content: one `WebContentsView` per
+  Pod, native menus, notifications, persistence, the git bridge.
+- `src/preload` — two bridges: `window.deskpods` for the chrome, and a minimal
+  `window.__deskpods` (notifications + git) injected into Pod pages.
+- `src/renderer` — the React chrome (sidebar, dialogs, find bar), plus a second
+  tiny renderer in `src/overlay` for what must paint above the Pods.
+
+One constraint shapes most of the UI: a `WebContentsView` always paints above
+the renderer. Anything that must appear over a page therefore either lives in
+the transparent overlay window (tooltips, toasts, the zoom pill), asks main to
+hide the view (dialogs), or takes room away from it (the find bar).

@@ -3,6 +3,7 @@ import type { PodId } from '@types'
 import { useEffect } from 'react'
 import { AddPodDialog } from './AddPodDialog'
 import { FolderSettingsDialog } from './FolderSettingsDialog'
+import { GitPermissionDialog } from './GitPermissionDialog'
 import { PromptDialog } from './PromptDialog'
 import { normalizeUrl } from './url'
 import { usePodStore } from './usePodStore'
@@ -65,5 +66,7 @@ export function DialogsHost(): React.JSX.Element | null {
       return <EditPodUrl id={dialog.id} />
     case 'folder-settings':
       return <FolderSettingsDialog id={dialog.id} />
+    case 'git-permission':
+      return <GitPermissionDialog id={dialog.id} origin={dialog.origin} />
   }
 }

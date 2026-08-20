@@ -2,6 +2,8 @@ import { join } from 'node:path'
 import {
   type FindOptions,
   type FindResult,
+  type GitRequest,
+  type GitResult,
   IpcChannels,
   type Pod,
   type PodId,
@@ -136,6 +138,8 @@ export class PodManager {
   onFindRequested?: () => void
   /** Set by the IPC layer: match count of the running in-page search. */
   onFindResult?: (id: PodId, result: FindResult) => void
+  /** Set by the IPC layer: the Pod's page asked to run a git command. */
+  onGitRequest?: (id: PodId, request: GitRequest) => Promise<GitResult>
 
   constructor(window: BrowserWindow) {
     this.window = window
@@ -144,6 +148,13 @@ export class PodManager {
   /** Id of the currently active Pod (null if none). */
   get activePodId(): PodId | null {
     return this.activeId
+  }
+
+  /** URL currently loaded by a Pod, used to tell the user who is asking for
+   *  something. Empty when the Pod has no live view. */
+  urlOf(id: PodId): string {
+    const wc = this.views.get(id)?.webContents
+    return wc && !wc.isDestroyed() ? wc.getURL() : ''
   }
 
   /** Whether a live view exists for this Pod (i.e. it consumes resources). */
@@ -203,6 +214,22 @@ export class PodManager {
     wc.ipc.on(IpcChannels.podNotification, (_e, payload: PodNotifyPayload) =>
       this.onNotification?.(pod.id, payload ?? { title: '' })
     )
+
+    // Git bridge. Registered on THIS Pod's web contents, so a request always
+    // carries the Pod it came from and can never be attributed to another.
+    wc.ipc.handle(IpcChannels.podGit, (_e, request: GitRequest): Promise<GitResult> => {
+      const handler = this.onGitRequest
+      if (!handler) {
+        return Promise.resolve({
+          ok: false,
+          code: -1,
+          stdout: '',
+          stderr: '',
+          error: 'Git bridge unavailable.'
+        })
+      }
+      return handler(pod.id, request ?? { args: [] })
+    })
 
     // Restore the saved zoom on every load: Chromium resets the factor when the
     // page navigates to another origin (a login redirect, for instance).

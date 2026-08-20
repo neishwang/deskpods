@@ -26,6 +26,9 @@ export function useCommands(): (command: UiCommand) => void {
       case 'folder-settings':
         store.setDialog({ type: 'folder-settings', id: command.id })
         break
+      case 'git-permission':
+        store.setDialog({ type: 'git-permission', id: command.id, origin: command.origin })
+        break
     }
   }, [])
 }

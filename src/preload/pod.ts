@@ -9,13 +9,24 @@ import { contextBridge, ipcRenderer } from 'electron'
  *
  * Nothing else from Node/Electron is exposed to untrusted Pod content.
  *
+ * It also exposes `git()`, the bridge a locally hosted app can use to run git
+ * commands. Calling it costs the page nothing by itself: main asks the user to
+ * authorise THIS Pod (and pick the folder to work in) the first time, and
+ * refuses every call until that answer exists.
+ *
  * NOTE: kept self-contained (no `@types` import) on purpose. A sandboxed preload
  * cannot `require` a shared chunk, so sharing code with `preload/index.ts` would
  * make Rollup split out a chunk and break BOTH preloads at runtime. The channel
- * string must stay in sync with `IpcChannels.podNotification`.
+ * strings must stay in sync with `IpcChannels.podNotification` / `.podGit`.
  */
 contextBridge.exposeInMainWorld('__deskpods', {
   // Payload: { title, body?, icon? } captured from the wrapped Notification, so
   // main can render a themed toast instead of the web app's native popup.
-  notify: (payload: unknown) => ipcRenderer.send('pods:notification', payload)
+  notify: (payload: unknown) => ipcRenderer.send('pods:notification', payload),
+
+  // Run a git command in the folder granted to this Pod. `args` is an array
+  // (never a shell string); `options.cwd` is a path relative to that folder.
+  // Resolves with { ok, code, stdout, stderr, error? }.
+  git: (args: unknown, options?: { cwd?: string }) =>
+    ipcRenderer.invoke('pods:git', { args, cwd: options?.cwd })
 })

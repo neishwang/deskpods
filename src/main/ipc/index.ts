@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { isValidArgs, resolveWorkingDirectory, runGit } from '@main/git'
 import { cleanTitle, setTaskbarBadge, titleUnreadCount } from '@main/notifications'
 import { saveState } from '@main/persistence/store'
 import type { PodManager } from '@main/pods/PodManager'
@@ -12,9 +13,12 @@ import {
   type FolderId,
   type FolderPatch,
   type FolderPlacement,
+  type GitRequest,
+  type GitResult,
   IpcChannels,
   type OverlayToast,
   type Pod,
+  type PodGitAccess,
   type PodId,
   type PodPatch,
   type PodPlacement,
@@ -153,6 +157,7 @@ export function registerIpc(
   // --- internal mutations shared by IPC handlers and native menus ---
 
   const removePod = (id: PodId) => {
+    settleGitPrompt(id, { allowed: false })
     state.pods = state.pods.filter((p) => p.id !== id)
     if (state.activePodId === id) state.activePodId = state.pods[0]?.id ?? null
     pods.destroy(id)
@@ -192,6 +197,64 @@ export function registerIpc(
     const before = state.folders.length
     state.folders = state.folders.filter((f) => used.has(f.id))
     return state.folders.length !== before
+  }
+
+  // --- git bridge -------------------------------------------------------
+  // A Pod's page can run git, but only once the user has said yes FOR THAT POD
+  // and picked the folder to work in. The answer rides with the Pod, so
+  // deleting it (or creating another one on the same URL) asks again.
+  const gitPrompts = new Map<
+    PodId,
+    { promise: Promise<PodGitAccess>; answer: (g: PodGitAccess) => void }
+  >()
+
+  const refuse = (error: string): GitResult => ({
+    ok: false,
+    code: -1,
+    stdout: '',
+    stderr: '',
+    error
+  })
+
+  /** Ask the chrome to prompt, or join the prompt already on screen for this
+   *  Pod so a page firing several commands raises a single dialog. */
+  const askGitAccess = (id: PodId): Promise<PodGitAccess> => {
+    const pending = gitPrompts.get(id)
+    if (pending) return pending.promise
+
+    let answer!: (grant: PodGitAccess) => void
+    const promise = new Promise<PodGitAccess>((resolve) => {
+      answer = resolve
+    })
+    gitPrompts.set(id, { promise, answer })
+    send(IpcChannels.uiCommand, { type: 'git-permission', id, origin: pods.urlOf(id) })
+    return promise
+  }
+
+  /** Settle a pending prompt (user answer, or the Pod going away). */
+  const settleGitPrompt = (id: PodId, grant: PodGitAccess) => {
+    const pending = gitPrompts.get(id)
+    if (!pending) return
+    gitPrompts.delete(id)
+    pending.answer(grant)
+  }
+
+  pods.onGitRequest = async (id, request: GitRequest): Promise<GitResult> => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod) return refuse('Unknown Pod.')
+    if (!isValidArgs(request?.args)) {
+      return refuse('git expects a non-empty array of string arguments.')
+    }
+
+    const grant = pod.settings?.git ?? (await askGitAccess(id))
+    if (!grant.allowed || !grant.root) {
+      return refuse('This Pod is not allowed to run git commands.')
+    }
+
+    const cwd = resolveWorkingDirectory(grant.root, request.cwd)
+    if (!cwd) return refuse('Working directory outside the folder granted to this Pod.')
+
+    return runGit(request.args, cwd)
   }
 
   // Ctrl+F inside a Pod: ask the chrome to slide its find bar in.
@@ -367,6 +430,27 @@ export function registerIpc(
     pods.setOverlay(active)
   })
 
+  ipcMain.handle(
+    IpcChannels.gitPermission,
+    (_e, id: PodId, allowed: boolean, root: string | null): void => {
+      const grant: PodGitAccess = allowed && root ? { allowed: true, root } : { allowed: false }
+      const pod = state.pods.find((p) => p.id === id)
+      if (pod) {
+        pod.settings = { ...pod.settings, git: grant }
+        persist()
+      }
+      settleGitPrompt(id, grant)
+    }
+  )
+
+  ipcMain.handle(IpcChannels.pickFolder, async (): Promise<string | null> => {
+    const result = await dialog.showOpenDialog(window, {
+      properties: ['openDirectory'],
+      title: 'Choose the folder this Pod may run git in'
+    })
+    return result.filePaths[0] ?? null
+  })
+
   ipcMain.handle(IpcChannels.findInPage, (_e, text: string, options?: FindOptions): void => {
     pods.find(text, options)
   })
@@ -470,6 +554,19 @@ export function registerIpc(
       { type: 'separator' },
       { label: 'Move to', submenu: moveTargets },
       { type: 'separator' },
+      // Shown only once an answer exists, so the user can take it back.
+      ...(pod.settings?.git
+        ? [
+            {
+              label: pod.settings.git.allowed ? 'Revoke Git Access' : 'Reset Git Permission',
+              click: () => {
+                pod.settings = { ...pod.settings, git: undefined }
+                pushState()
+              }
+            },
+            { type: 'separator' } as MenuItemConstructorOptions
+          ]
+        : []),
       // Only worth showing when the Pod is actually zoomed.
       ...(zoom && zoom !== 1
         ? [

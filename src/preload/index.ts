@@ -48,6 +48,9 @@ const api: DeskPodsApi = {
   showPodMenu: (id: PodId) => ipcRenderer.invoke(IpcChannels.showPodMenu, id),
   showFolderMenu: (id: FolderId) => ipcRenderer.invoke(IpcChannels.showFolderMenu, id),
   pickFile: () => ipcRenderer.invoke(IpcChannels.pickFile),
+  pickFolder: () => ipcRenderer.invoke(IpcChannels.pickFolder),
+  resolveGitPermission: (id: PodId, allowed: boolean, root: string | null) =>
+    ipcRenderer.invoke(IpcChannels.gitPermission, id, allowed, root),
   showTooltip: (payload: TooltipPayload) => ipcRenderer.invoke(IpcChannels.tooltipShow, payload),
   hideTooltip: () => ipcRenderer.invoke(IpcChannels.tooltipHide),
   onTooltip: (listener: (payload: TooltipPayload | null) => void) => {

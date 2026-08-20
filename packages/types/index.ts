@@ -6,10 +6,46 @@
 export type PodId = string
 export type FolderId = string
 
+/**
+ * Permission for a Pod's pages to run git commands, decided once by the user
+ * and remembered with the Pod. Deleting the Pod forgets it, so a Pod recreated
+ * on the same URL is asked again.
+ */
+export interface PodGitAccess {
+  allowed: boolean
+  /** Absolute path of the folder picked when granting. Commands run there and
+   *  may never step outside it. Absent when access was refused. */
+  root?: string
+}
+
 export interface PodSettings {
   /** Zoom factor applied to the Pod's contents (1 = 100%). Set with
    *  Ctrl+wheel / Ctrl+`+`-`-` inside the Pod and remembered across restarts. */
   zoom?: number
+  /** Set once the user has answered the git permission prompt for this Pod. */
+  git?: PodGitAccess
+}
+
+/** A git command a Pod's page asks DeskPods to run. */
+export interface GitRequest {
+  /** Arguments handed to git as an array — never a shell string, so nothing is
+   *  interpreted by a shell. Example: ['status', '--porcelain']. */
+  args: string[]
+  /** Optional path RELATIVE to the granted folder; absolute paths and anything
+   *  climbing out with `..` are refused. */
+  cwd?: string
+}
+
+/** What the page gets back once the command has run. */
+export interface GitResult {
+  /** True when git exited with code 0. */
+  ok: boolean
+  code: number
+  stdout: string
+  stderr: string
+  /** Set when DeskPods declined to run the command at all (no permission,
+   *  invalid arguments, path outside the granted folder, git missing…). */
+  error?: string
 }
 
 export interface Pod {
@@ -139,6 +175,8 @@ export type UiCommand =
   | { type: 'add-pod-in-folder'; folderId: FolderId }
   /** Ctrl+F inside a Pod: open the find bar under the active Pod. */
   | { type: 'find-in-page' }
+  /** A Pod's page asked to run git and has no answer on file yet. */
+  | { type: 'git-permission'; id: PodId; origin: string }
   | { type: 'rename-pod'; id: PodId }
   | { type: 'edit-pod-url'; id: PodId }
   | { type: 'folder-settings'; id: FolderId }
@@ -180,6 +218,11 @@ export interface DeskPodsApi {
   /** Open a native file picker (PDF/HTML) and return the chosen file as a
    *  `file://` URL, or null if the dialog was cancelled. */
   pickFile(): Promise<string | null>
+  /** Open a native folder picker and return the absolute path, or null. */
+  pickFolder(): Promise<string | null>
+  /** Answer the git permission prompt for a Pod. `root` is the folder the user
+   *  picked; a null root (or allowed=false) records a refusal. */
+  resolveGitPermission(id: PodId, allowed: boolean, root: string | null): Promise<void>
 
   // Tooltips are drawn in a transparent overlay window so they can sit above
   // the Pod's native web view.
@@ -227,6 +270,12 @@ export const IpcChannels = {
   showFolderMenu: 'ui:folderMenu',
   /** renderer -> main: open a native file picker, returns a file:// URL. */
   pickFile: 'dialog:pickFile',
+  /** renderer -> main: open a native folder picker, returns an absolute path. */
+  pickFolder: 'dialog:pickFolder',
+  /** Pod page -> main: run a git command (see PodGitAccess). */
+  podGit: 'pods:git',
+  /** renderer -> main: the user answered the git permission prompt. */
+  gitPermission: 'pods:gitPermission',
   /** Pod page -> main: the web app raised a Notification (via the Pod preload). */
   podNotification: 'pods:notification',
   tooltipShow: 'ui:tooltip:show',
