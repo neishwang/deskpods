@@ -53,10 +53,14 @@ function render(S) {
   const buf = new Float64Array(S * S * 4)
   const u = S / 1024 // scale factor from the 1024 reference design
   const R = 224 * u // background corner radius
+  // Centres are expressed in the 1024 reference design and scaled ONCE by `u`.
+  // Scaling them twice (which is what mixing `u` into the offsets does) makes
+  // the three pods converge on the centre as the size drops, so every small
+  // icon collapsed into a single bar instead of the stacked motif.
   const pods = [
-    { cx: 512 - 46 * u, cy: 512 - 190 * u, col: POD_LIGHT },
-    { cx: 512 + 8 * u, cy: 512, col: POD_ACCENT },
-    { cx: 512 + 54 * u, cy: 512 + 190 * u, col: POD_DARK }
+    { cx: 512 - 46, cy: 512 - 190, col: POD_LIGHT },
+    { cx: 512 + 8, cy: 512, col: POD_ACCENT },
+    { cx: 512 + 54, cy: 512 + 190, col: POD_DARK }
   ].map((p) => ({ ...p, cx: p.cx * u, cy: p.cy * u }))
   const podHW = 235 * u
   const podHH = 74 * u
