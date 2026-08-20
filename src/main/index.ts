@@ -4,7 +4,7 @@ import { flushState, loadState } from '@main/persistence/store'
 import { PodManager } from '@main/pods/PodManager'
 import { createMainWindow } from '@main/windows/mainWindow'
 import { createOverlayWindow } from '@main/windows/overlayWindow'
-import { BrowserWindow, app } from 'electron'
+import { BrowserWindow, Menu, app } from 'electron'
 
 // Portable mode: keep ALL app data — the state file AND each Pod's Chromium profile
 // (cookies, cache, storage) — in a `data/` folder next to the executable, so
@@ -31,6 +31,12 @@ function bootstrap(): void {
 }
 
 app.whenReady().then(() => {
+  // No application menu: DeskPods has no browser chrome, and the default menu's
+  // accelerators (Ctrl+R, Ctrl+±, F12…) would act on the React chrome instead of
+  // the Pod you are looking at. The Pods get the browser keys they need from
+  // PodManager, aimed at the right web contents.
+  Menu.setApplicationMenu(null)
+
   // Windows attributes the taskbar button — and thus the unread overlay icon
   // (setOverlayIcon) and OS notifications — to this AppUserModelID. Must match
   // the electron-builder appId so it's stable across launches.

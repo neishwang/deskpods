@@ -2,6 +2,8 @@ import {
   type AppState,
   type CreatePodInput,
   type DeskPodsApi,
+  type FindOptions,
+  type FindResult,
   type FolderId,
   type FolderPatch,
   type FolderPlacement,
@@ -28,6 +30,14 @@ const api: DeskPodsApi = {
   updateBounds: (bounds: Rect) => ipcRenderer.invoke(IpcChannels.updateBounds, bounds),
   setOverlay: (active: boolean) => ipcRenderer.invoke(IpcChannels.setOverlay, active),
   updatePod: (id: PodId, patch: PodPatch) => ipcRenderer.invoke(IpcChannels.updatePod, id, patch),
+  findInPage: (text: string, options?: FindOptions) =>
+    ipcRenderer.invoke(IpcChannels.findInPage, text, options),
+  stopFindInPage: () => ipcRenderer.invoke(IpcChannels.stopFindInPage),
+  onFindResult: (listener: (result: FindResult) => void) => {
+    const handler = (_e: IpcRendererEvent, result: FindResult) => listener(result)
+    ipcRenderer.on(IpcChannels.findResult, handler)
+    return () => ipcRenderer.removeListener(IpcChannels.findResult, handler)
+  },
   reorderPods: (placements: PodPlacement[]) =>
     ipcRenderer.invoke(IpcChannels.reorderPods, placements),
   createFolder: (name: string) => ipcRenderer.invoke(IpcChannels.createFolder, name),

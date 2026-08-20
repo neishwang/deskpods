@@ -26,6 +26,22 @@ body {
   user-select: none;
 }
 
+/* The find bar slides up into the strip the workspace frees for it. The strip
+   itself is not animated: its height drives the Pod view's bounds, and animating
+   that would fire a bounds update on every frame. */
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 /* Tailwind v4 no longer sets cursor:pointer on buttons by default. */
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]) {

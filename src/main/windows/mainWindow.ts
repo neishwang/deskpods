@@ -15,7 +15,6 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     backgroundColor: '#0f172a',
-    autoHideMenuBar: true,
     // In packaged builds the icon is embedded in the executable; in dev, point
     // the window at the generated PNG (out/main -> ../../build/icon.png).
     ...(app.isPackaged ? {} : { icon: join(__dirname, '../../build/icon.png') }),

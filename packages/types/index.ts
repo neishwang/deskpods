@@ -6,6 +6,12 @@
 export type PodId = string
 export type FolderId = string
 
+export interface PodSettings {
+  /** Zoom factor applied to the Pod's contents (1 = 100%). Set with
+   *  Ctrl+wheel / Ctrl+`+`-`-` inside the Pod and remembered across restarts. */
+  zoom?: number
+}
+
 export interface Pod {
   id: PodId
   name: string
@@ -17,6 +23,7 @@ export interface Pod {
   /** Visual grouping only; null means root level. */
   folderId: FolderId | null
   order: number
+  settings?: PodSettings
   /** Runtime-only: the Pod has an unread notification (red dot). Derived by
    *  main from the page title; never persisted. */
   unread?: boolean
@@ -71,6 +78,14 @@ export interface OverlayToast {
   body?: string
 }
 
+/** Progress of an in-page search, pushed by main while the user types. */
+export interface FindResult {
+  /** Total number of matches on the page. */
+  matches: number
+  /** 1-based index of the highlighted match, 0 when there is none. */
+  activeMatch: number
+}
+
 /** Payload to create a Pod; id/order/profile are assigned by main. */
 export interface CreatePodInput {
   /** Optional; when empty, main derives it from the URL hostname and later
@@ -83,6 +98,14 @@ export interface CreatePodInput {
    *  share, so one login (e.g. Google) covers several Pods. Distinct from
    *  `folderId`, which is purely visual and never affects isolation. */
   linkTo?: PodId
+}
+
+/** How the next `findInPage` call should move through the matches. */
+export interface FindOptions {
+  /** Search downwards (default) or upwards. */
+  forward?: boolean
+  /** False starts a new search, true jumps to the next match of the same text. */
+  findNext?: boolean
 }
 
 /** Fields of a Pod the user can edit directly. */
@@ -105,12 +128,14 @@ export interface FolderPlacement {
 }
 
 /**
- * Actions raised by the native context menus in main that need a dialog in the
- * renderer. Main owns the menus (they must paint above the Pods' native views),
- * the renderer owns the dialogs, so the intent travels over `uiCommand`.
+ * Actions raised inside main that the chrome has to carry out: the native
+ * context menus (which must paint above the Pods' native views) and the
+ * page-level keys pressed while a Pod has focus. Both travel over `uiCommand`.
  */
 export type UiCommand =
   | { type: 'add-pod-in-folder'; folderId: FolderId }
+  /** Ctrl+F inside a Pod: open the find bar under the active Pod. */
+  | { type: 'find-in-page' }
   | { type: 'rename-pod'; id: PodId }
   | { type: 'edit-pod-url'; id: PodId }
   | { type: 'folder-settings'; id: FolderId }
@@ -135,6 +160,14 @@ export interface DeskPodsApi {
   createFolder(name: string): Promise<Folder>
   updateFolder(id: FolderId, patch: FolderPatch): Promise<void>
   reorderFolders(placements: FolderPlacement[]): Promise<void>
+
+  // In-page search of the active Pod (Chromium's own find, so matches are
+  // highlighted by the engine itself).
+  findInPage(text: string, options?: FindOptions): Promise<void>
+  stopFindInPage(): Promise<void>
+  /** Subscribe to match counts for the running search. Returns an unsubscribe
+   *  function. */
+  onFindResult(listener: (result: FindResult) => void): () => void
 
   // Native context menus (rendered by main to avoid z-order issues with the
   // Pod's native web view).
@@ -178,6 +211,8 @@ export const IpcChannels = {
   updateBounds: 'pods:updateBounds',
   setOverlay: 'ui:setOverlay',
   updatePod: 'pods:update',
+  findInPage: 'pods:findInPage',
+  stopFindInPage: 'pods:stopFindInPage',
   reorderPods: 'pods:reorder',
   createFolder: 'folders:create',
   updateFolder: 'folders:update',
@@ -192,6 +227,8 @@ export const IpcChannels = {
   tooltipHide: 'ui:tooltip:hide',
   /** main -> renderer push. */
   podUpdated: 'pods:updated',
+  /** main -> renderer push: match count for the running in-page search. */
+  findResult: 'pods:findResult',
   uiCommand: 'ui:command',
   stateChanged: 'app:stateChanged',
   /** overlay window -> main: nothing visible, the overlay can be hidden. */

@@ -11,6 +11,9 @@ export function useCommands(): (command: UiCommand) => void {
   return useCallback((command: UiCommand) => {
     const store = usePodStore.getState()
     switch (command.type) {
+      case 'find-in-page':
+        store.openFind()
+        break
       case 'add-pod-in-folder':
         store.setDialog({ type: 'add-pod', folderId: command.folderId })
         break

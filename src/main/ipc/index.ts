@@ -7,6 +7,7 @@ import type { PodManager } from '@main/pods/PodManager'
 import {
   type AppState,
   type CreatePodInput,
+  type FindOptions,
   type Folder,
   type FolderId,
   type FolderPatch,
@@ -193,6 +194,33 @@ export function registerIpc(
     return state.folders.length !== before
   }
 
+  // Ctrl+F inside a Pod: ask the chrome to slide its find bar in.
+  pods.onFindRequested = () => send(IpcChannels.uiCommand, { type: 'find-in-page' })
+
+  // Match count of the running in-page search, for the find bar's counter.
+  pods.onFindResult = (id, result) => {
+    if (id === pods.activePodId) send(IpcChannels.findResult, result)
+  }
+
+  // The user zoomed a Pod (Ctrl+wheel or Ctrl+±): remember the factor so the
+  // Pod reopens at the size they chose.
+  pods.onZoom = (id, zoom) => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod) return
+    if (zoom === 1) {
+      pod.settings = undefined
+    } else {
+      pod.settings = { ...pod.settings, zoom }
+    }
+    persist()
+  }
+
+  // Mouse back/forward buttons drive the active Pod's history, like a browser.
+  window.on('app-command', (_e, command) => {
+    if (command === 'browser-backward') pods.navigate('back')
+    else if (command === 'browser-forward') pods.navigate('forward')
+  })
+
   // Loading indicator for the sidebar (runtime-only, like unread).
   pods.onLoading = (id, isLoading) => {
     if (isLoading === loading.has(id)) return
@@ -312,6 +340,8 @@ export function registerIpc(
   })
 
   ipcMain.handle(IpcChannels.activatePod, (_e, id: PodId): void => {
+    // Leave no search highlighted behind on the Pod we are stepping away from.
+    pods.stopFind()
     state.activePodId = id
     pods.activate(id)
     // Viewing a Pod clears a title-less Notification signal (its only "read"
@@ -328,6 +358,14 @@ export function registerIpc(
 
   ipcMain.handle(IpcChannels.setOverlay, (_e, active: boolean): void => {
     pods.setOverlay(active)
+  })
+
+  ipcMain.handle(IpcChannels.findInPage, (_e, text: string, options?: FindOptions): void => {
+    pods.find(text, options)
+  })
+
+  ipcMain.handle(IpcChannels.stopFindInPage, (): void => {
+    pods.stopFind()
   })
 
   ipcMain.handle(IpcChannels.updatePod, (_e, id: PodId, patch: PodPatch): void => {

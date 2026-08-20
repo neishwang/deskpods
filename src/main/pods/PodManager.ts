@@ -1,5 +1,13 @@
 import { join } from 'node:path'
-import { IpcChannels, type Pod, type PodId, type PodNotifyPayload, type Rect } from '@types'
+import {
+  type FindOptions,
+  type FindResult,
+  IpcChannels,
+  type Pod,
+  type PodId,
+  type PodNotifyPayload,
+  type Rect
+} from '@types'
 import {
   type BrowserWindow,
   Menu,
@@ -73,6 +81,22 @@ const NOTIFICATION_HOOK = `(() => {
   }
 })();`
 
+/**
+ * Chromium's own zoom ladder. Ctrl+wheel and Ctrl+`+`/`-` walk these steps, so
+ * zooming feels exactly like it does in a browser instead of drifting by an
+ * arbitrary delta.
+ */
+const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]
+
+/** Index of the ladder step closest to `factor`. */
+function nearestZoomStep(factor: number): number {
+  let best = 0
+  for (let i = 1; i < ZOOM_STEPS.length; i++) {
+    if (Math.abs(ZOOM_STEPS[i] - factor) < Math.abs(ZOOM_STEPS[best] - factor)) best = i
+  }
+  return best
+}
+
 /** Metadata a Pod reports about itself once its page loads. */
 export interface PodMeta {
   title?: string
@@ -103,6 +127,12 @@ export class PodManager {
   /** Set by the IPC layer: the Pod's web app raised a notification (title/body
    *  captured from the wrapped `window.Notification`). */
   onNotification?: (id: PodId, payload: PodNotifyPayload) => void
+  /** Set by the IPC layer: the user zoomed a Pod, so the factor can be saved. */
+  onZoom?: (id: PodId, zoom: number) => void
+  /** Set by the IPC layer: Ctrl+F was pressed inside a Pod. */
+  onFindRequested?: () => void
+  /** Set by the IPC layer: match count of the running in-page search. */
+  onFindResult?: (id: PodId, result: FindResult) => void
 
   constructor(window: BrowserWindow) {
     this.window = window
@@ -171,6 +201,78 @@ export class PodManager {
       this.onNotification?.(pod.id, payload ?? { title: '' })
     )
 
+    // Restore the saved zoom on every load: Chromium resets the factor when the
+    // page navigates to another origin (a login redirect, for instance).
+    wc.on('did-finish-load', () => {
+      const zoom = this.podsById.get(pod.id)?.settings?.zoom
+      if (zoom && zoom !== 1) wc.setZoomFactor(zoom)
+    })
+
+    // Ctrl+wheel (and pinch): Chromium reports the intent but leaves the zoom
+    // to us, which is what lets each Pod keep its own factor.
+    wc.on('zoom-changed', (_e, direction) => {
+      this.stepZoom(pod.id, direction === 'in' ? 1 : -1)
+    })
+
+    // Match counts for the find bar; the highlighting itself is Chromium's.
+    wc.on('found-in-page', (_e, result) => {
+      this.onFindResult?.(pod.id, {
+        matches: result.matches,
+        activeMatch: result.activeMatchOrdinal
+      })
+    })
+
+    // The browser keys a user expects INSIDE a page. They never leave the Pod
+    // (except Ctrl+F, which needs the chrome to draw the find bar), so this is
+    // page behaviour rather than an app-wide shortcut bus.
+    wc.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return
+      const key = input.key.toLowerCase()
+      const ctrl = input.control || input.meta
+
+      // Reload — F5 / Ctrl+R, and their cache-busting variants.
+      if ((key === 'f5' && !input.shift) || (ctrl && key === 'r' && !input.shift)) {
+        event.preventDefault()
+        wc.reload()
+        return
+      }
+      if ((key === 'f5' && input.shift) || (ctrl && key === 'r' && input.shift)) {
+        event.preventDefault()
+        wc.reloadIgnoringCache()
+        return
+      }
+
+      // History — Alt+Left / Alt+Right.
+      if (input.alt && (key === 'arrowleft' || key === 'arrowright')) {
+        event.preventDefault()
+        if (key === 'arrowleft') {
+          if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
+        } else if (wc.navigationHistory.canGoForward()) {
+          wc.navigationHistory.goForward()
+        }
+        return
+      }
+
+      if (!ctrl) return
+
+      // Zoom — Ctrl+`+` / Ctrl+`-` / Ctrl+0.
+      if (key === '=' || key === '+') {
+        event.preventDefault()
+        this.stepZoom(pod.id, 1)
+      } else if (key === '-' || key === '_') {
+        event.preventDefault()
+        this.stepZoom(pod.id, -1)
+      } else if (key === '0') {
+        event.preventDefault()
+        this.stepZoom(pod.id, 0)
+      } else if (key === 'f') {
+        // We intercept before the page sees it, so DeskPods' find bar always
+        // wins over a web app's own Ctrl+F.
+        event.preventDefault()
+        this.onFindRequested?.()
+      }
+    })
+
     // Native context menu so users can copy/paste inside web apps.
     wc.on('context-menu', (_e, params) => this.showContextMenu(wc, params))
 
@@ -187,35 +289,142 @@ export class PodManager {
     return view
   }
 
+  /**
+   * The Pod's right-click menu. Electron never exposes Chromium's own menu, but
+   * Chrome builds its menu from exactly the `params` we get here — so this is
+   * the same menu, minus the browser-only entries a Pod has no use for.
+   */
   private showContextMenu(wc: Electron.WebContents, params: Electron.ContextMenuParams): void {
     const template: MenuItemConstructorOptions[] = []
+    const group = (...items: MenuItemConstructorOptions[]) => {
+      if (items.length === 0) return
+      if (template.length > 0) template.push({ type: 'separator' })
+      template.push(...items)
+    }
+
+    // Spelling suggestions come first, as they do in Chrome.
+    if (params.misspelledWord) {
+      group(
+        ...(params.dictionarySuggestions.length > 0
+          ? params.dictionarySuggestions.slice(0, 5).map<MenuItemConstructorOptions>((word) => ({
+              label: word,
+              click: () => wc.replaceMisspelling(word)
+            }))
+          : [{ label: 'No spelling suggestions', enabled: false }])
+      )
+    }
 
     if (params.isEditable || params.selectionText) {
-      template.push(
+      const editing: MenuItemConstructorOptions[] = []
+      if (params.isEditable) {
+        editing.push(
+          { role: 'undo', enabled: params.editFlags.canUndo },
+          { role: 'redo', enabled: params.editFlags.canRedo },
+          { type: 'separator' }
+        )
+      }
+      editing.push(
         { role: 'cut', enabled: params.editFlags.canCut },
         { role: 'copy', enabled: params.editFlags.canCopy },
         { role: 'paste', enabled: params.editFlags.canPaste },
         { type: 'separator' },
         { role: 'selectAll' }
       )
+      group(...editing)
+    }
+
+    if (params.selectionText.trim()) {
+      const selection = params.selectionText.trim()
+      const shown = selection.length > 40 ? `${selection.slice(0, 40)}…` : selection
+      group({
+        label: `Search the web for "${shown}"`,
+        click: () => {
+          void shell.openExternal(
+            `https://www.google.com/search?q=${encodeURIComponent(selection)}`
+          )
+        }
+      })
     }
 
     if (params.linkURL) {
-      if (template.length > 0) template.push({ type: 'separator' })
-      template.push({ label: 'Copy Link', click: () => clipboard.writeText(params.linkURL) })
+      group(
+        { label: 'Open Link in Browser', click: () => void shell.openExternal(params.linkURL) },
+        { label: 'Copy Link', click: () => clipboard.writeText(params.linkURL) }
+      )
     }
 
-    if (template.length > 0) template.push({ type: 'separator' })
-    template.push(
+    if (params.mediaType === 'image' && params.srcURL) {
+      group(
+        { label: 'Copy Image', click: () => wc.copyImageAt(params.x, params.y) },
+        { label: 'Copy Image Address', click: () => clipboard.writeText(params.srcURL) },
+        // Electron's default download handler opens a Save dialog for this.
+        { label: 'Save Image As…', click: () => wc.downloadURL(params.srcURL) },
+        { label: 'Open Image in Browser', click: () => void shell.openExternal(params.srcURL) }
+      )
+    }
+
+    // Navigation always sits at the bottom, so its position never moves.
+    group(
       {
         label: 'Back',
         enabled: wc.navigationHistory.canGoBack(),
         click: () => wc.navigationHistory.goBack()
       },
+      {
+        label: 'Forward',
+        enabled: wc.navigationHistory.canGoForward(),
+        click: () => wc.navigationHistory.goForward()
+      },
       { label: 'Reload', click: () => wc.reload() }
     )
 
     Menu.buildFromTemplate(template).popup()
+  }
+
+  /** Move a Pod one notch along the zoom ladder (`direction` 0 resets to 100%)
+   *  and report the new factor so it can be persisted. */
+  private stepZoom(id: PodId, direction: 1 | 0 | -1): void {
+    const wc = this.views.get(id)?.webContents
+    if (!wc || wc.isDestroyed()) return
+
+    let factor = 1
+    if (direction !== 0) {
+      const index = nearestZoomStep(wc.getZoomFactor()) + direction
+      factor = ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, index))]
+    }
+    if (factor === wc.getZoomFactor()) return
+
+    wc.setZoomFactor(factor)
+    this.onZoom?.(id, factor)
+  }
+
+  /** Run Chromium's in-page search on the active Pod. */
+  find(text: string, options?: FindOptions): void {
+    const wc = this.activeId ? this.views.get(this.activeId)?.webContents : undefined
+    if (!wc || wc.isDestroyed()) return
+    if (!text) {
+      wc.stopFindInPage('clearSelection')
+      return
+    }
+    wc.findInPage(text, { forward: options?.forward ?? true, findNext: options?.findNext ?? false })
+  }
+
+  /** Drop the search highlighting on the active Pod. */
+  stopFind(): void {
+    const wc = this.activeId ? this.views.get(this.activeId)?.webContents : undefined
+    if (wc && !wc.isDestroyed()) wc.stopFindInPage('clearSelection')
+  }
+
+  /** History navigation for the mouse's back/forward buttons. */
+  navigate(direction: 'back' | 'forward'): void {
+    const wc = this.activeId ? this.views.get(this.activeId)?.webContents : undefined
+    if (!wc || wc.isDestroyed()) return
+    const history = wc.navigationHistory
+    if (direction === 'back') {
+      if (history.canGoBack()) history.goBack()
+    } else if (history.canGoForward()) {
+      history.goForward()
+    }
   }
 
   activate(id: PodId): void {

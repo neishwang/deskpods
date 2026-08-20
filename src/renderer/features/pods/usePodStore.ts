@@ -23,8 +23,15 @@ export type SidebarDialog =
 interface PodStore extends AppState {
   loaded: boolean
   dialog: SidebarDialog | null
+  /** The find bar is showing under the active Pod. */
+  findOpen: boolean
+  /** Bumped on every Ctrl+F so the bar re-focuses and selects its input, even
+   *  when it is already open. */
+  findToken: number
 
   setDialog: (dialog: SidebarDialog | null) => void
+  openFind: () => void
+  closeFind: () => void
   load: () => Promise<void>
   setActive: (id: PodId) => Promise<void>
   addPod: (input: CreatePodInput) => Promise<void>
@@ -51,8 +58,17 @@ export const usePodStore = create<PodStore>((set, get) => ({
   activePodId: null,
   loaded: false,
   dialog: null,
+  findOpen: false,
+  findToken: 0,
 
   setDialog: (dialog) => set({ dialog }),
+
+  openFind: () => set({ findOpen: true, findToken: get().findToken + 1 }),
+
+  closeFind: () => {
+    set({ findOpen: false })
+    void ipc.stopFindInPage()
+  },
 
   load: async () => {
     const state = await ipc.getState()
@@ -61,7 +77,8 @@ export const usePodStore = create<PodStore>((set, get) => ({
   },
 
   setActive: async (id) => {
-    set({ activePodId: id })
+    // A search belongs to the page it was run on; main clears the highlighting.
+    set({ activePodId: id, findOpen: false })
     await ipc.activatePod(id)
   },
 
