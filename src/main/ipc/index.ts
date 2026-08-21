@@ -5,6 +5,7 @@ import { isValidArgs, resolveWorkingDirectory, runGit } from '@main/git'
 import { cleanTitle, setTaskbarBadge, titleUnreadCount } from '@main/notifications'
 import { saveState } from '@main/persistence/store'
 import type { PodManager } from '@main/pods/PodManager'
+import { BackgroundPages } from '@main/scripting'
 import { createHitAreaTracker } from '@main/windows/overlayWindow'
 import {
   type AppState,
@@ -17,6 +18,8 @@ import {
   type GitRequest,
   type GitResult,
   IpcChannels,
+  type OpenPageOptions,
+  type OpenPageResult,
   type OverlayToast,
   type Pod,
   type PodGitAccess,
@@ -24,6 +27,7 @@ import {
   type PodPatch,
   type PodPlacement,
   type Rect,
+  type ScriptResult,
   type TooltipPayload,
   type UiCommand
 } from '@types'
@@ -159,6 +163,8 @@ export function registerIpc(
 
   const removePod = (id: PodId) => {
     settleGitPrompt(id, { allowed: false })
+    settleScriptingPrompt(id, false)
+    pages.closeAllFor(id)
     state.pods = state.pods.filter((p) => p.id !== id)
     if (state.activePodId === id) state.activePodId = state.pods[0]?.id ?? null
     pods.destroy(id)
@@ -257,6 +263,70 @@ export function registerIpc(
 
     return runGit(request.args, cwd)
   }
+
+  // --- background pages -------------------------------------------------
+  // A Pod can drive another site like an API: open it once on this Pod's
+  // session, run scripts against the loaded document, read the results. Same
+  // one-shot, per-Pod permission as git, kept separate from it.
+  const pages = new BackgroundPages()
+  const scriptingPrompts = new Map<
+    PodId,
+    { promise: Promise<boolean>; answer: (ok: boolean) => void }
+  >()
+
+  const askScripting = (id: PodId, target: string): Promise<boolean> => {
+    const pending = scriptingPrompts.get(id)
+    if (pending) return pending.promise
+
+    let answer!: (allowed: boolean) => void
+    const promise = new Promise<boolean>((resolve) => {
+      answer = resolve
+    })
+    scriptingPrompts.set(id, { promise, answer })
+    send(IpcChannels.uiCommand, {
+      type: 'scripting-permission',
+      id,
+      origin: pods.urlOf(id),
+      target
+    })
+    return promise
+  }
+
+  const settleScriptingPrompt = (id: PodId, allowed: boolean) => {
+    const pending = scriptingPrompts.get(id)
+    if (!pending) return
+    scriptingPrompts.delete(id)
+    pending.answer(allowed)
+  }
+
+  /** True when this Pod may drive background pages, asking if never answered. */
+  const mayScript = async (id: PodId, target: string): Promise<boolean> => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod) return false
+    if (pod.settings?.scripting !== undefined) return pod.settings.scripting
+    return askScripting(id, target)
+  }
+
+  pods.onOpenPage = async (id, url, options?: OpenPageOptions): Promise<OpenPageResult> => {
+    if (!(await mayScript(id, url))) {
+      return { ok: false, error: 'This Pod is not allowed to open background pages.' }
+    }
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod) return { ok: false, error: 'Unknown Pod.' }
+    return pages.open(id, pod.profile, url, options)
+  }
+
+  pods.onRunScript = async (id, handle, code): Promise<ScriptResult> => {
+    const pod = state.pods.find((p) => p.id === id)
+    // The handle only exists because permission was granted; re-check anyway,
+    // so revoking it stops scripts on pages that are already open.
+    if (!pod || pod.settings?.scripting !== true) {
+      return { ok: false, error: 'This Pod is not allowed to run scripts.' }
+    }
+    return pages.run(id, handle, code)
+  }
+
+  pods.onClosePage = (id, handle) => pages.close(id, handle)
 
   // Ctrl+F inside a Pod: ask the chrome to slide its find bar in.
   pods.onFindRequested = () => send(IpcChannels.uiCommand, { type: 'find-in-page' })
@@ -449,6 +519,16 @@ export function registerIpc(
     }
   )
 
+  ipcMain.handle(IpcChannels.scriptingPermission, (_e, id: PodId, allowed: boolean): void => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (pod) {
+      pod.settings = { ...pod.settings, scripting: allowed }
+      persist()
+    }
+    if (!allowed) pages.closeAllFor(id)
+    settleScriptingPrompt(id, allowed)
+  })
+
   ipcMain.handle(IpcChannels.pickFolder, async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog(window, {
       properties: ['openDirectory'],
@@ -561,6 +641,21 @@ export function registerIpc(
       { label: 'Move to', submenu: moveTargets },
       { type: 'separator' },
       // Shown only once an answer exists, so the user can take it back.
+      ...(pod.settings?.scripting !== undefined
+        ? [
+            {
+              label: pod.settings.scripting
+                ? 'Revoke Page Scripting'
+                : 'Reset Scripting Permission',
+              click: () => {
+                pages.closeAllFor(id)
+                pod.settings = { ...pod.settings, scripting: undefined }
+                pushState()
+              }
+            },
+            { type: 'separator' } as MenuItemConstructorOptions
+          ]
+        : []),
       ...(pod.settings?.git
         ? [
             {
@@ -596,7 +691,10 @@ export function registerIpc(
         // the next click reloads it. Only meaningful when a live view exists.
         label: 'Suspend',
         enabled: pods.hasView(id),
-        click: () => pods.suspend(id)
+        click: () => {
+          pages.closeAllFor(id)
+          pods.suspend(id)
+        }
       },
       {
         label: 'Delete',

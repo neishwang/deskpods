@@ -5,10 +5,13 @@ import {
   type GitRequest,
   type GitResult,
   IpcChannels,
+  type OpenPageOptions,
+  type OpenPageResult,
   type Pod,
   type PodId,
   type PodNotifyPayload,
-  type Rect
+  type Rect,
+  type ScriptResult
 } from '@types'
 import {
   type BrowserWindow,
@@ -140,6 +143,10 @@ export class PodManager {
   onFindResult?: (id: PodId, result: FindResult) => void
   /** Set by the IPC layer: the Pod's page asked to run a git command. */
   onGitRequest?: (id: PodId, request: GitRequest) => Promise<GitResult>
+  /** Set by the IPC layer: the Pod's page wants to drive a background page. */
+  onOpenPage?: (id: PodId, url: string, options?: OpenPageOptions) => Promise<OpenPageResult>
+  onRunScript?: (id: PodId, handle: string, code: string) => Promise<ScriptResult>
+  onClosePage?: (id: PodId, handle: string) => void
 
   constructor(window: BrowserWindow) {
     this.window = window
@@ -229,6 +236,35 @@ export class PodManager {
         })
       }
       return handler(pod.id, request ?? { args: [] })
+    })
+
+    // Background pages: same per-Pod scoping as the git bridge.
+    wc.ipc.handle(
+      IpcChannels.podOpenPage,
+      (_e, payload: { url?: unknown; options?: OpenPageOptions }): Promise<OpenPageResult> => {
+        if (!this.onOpenPage || typeof payload?.url !== 'string') {
+          return Promise.resolve({ ok: false, error: 'openPage expects a URL string.' })
+        }
+        return this.onOpenPage(pod.id, payload.url, payload.options)
+      }
+    )
+
+    wc.ipc.handle(
+      IpcChannels.podRunScript,
+      (_e, payload: { id?: unknown; code?: unknown }): Promise<ScriptResult> => {
+        if (
+          !this.onRunScript ||
+          typeof payload?.id !== 'string' ||
+          typeof payload?.code !== 'string'
+        ) {
+          return Promise.resolve({ ok: false, error: 'runScript expects a page id and code.' })
+        }
+        return this.onRunScript(pod.id, payload.id, payload.code)
+      }
+    )
+
+    wc.ipc.handle(IpcChannels.podClosePage, (_e, payload: { id?: unknown }): void => {
+      if (typeof payload?.id === 'string') this.onClosePage?.(pod.id, payload.id)
     })
 
     // Restore the saved zoom on every load: Chromium resets the factor when the

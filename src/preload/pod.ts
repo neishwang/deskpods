@@ -28,5 +28,14 @@ contextBridge.exposeInMainWorld('__deskpods', {
   // (never a shell string); `options.cwd` is a path relative to that folder.
   // Resolves with { ok, code, stdout, stderr, error? }.
   git: (args: unknown, options?: { cwd?: string }) =>
-    ipcRenderer.invoke('pods:git', { args, cwd: options?.cwd })
+    ipcRenderer.invoke('pods:git', { args, cwd: options?.cwd }),
+
+  // Drive a site in a hidden page on this Pod's session: open it once, run as
+  // many scripts as needed against that same loaded document, then close it.
+  // openPage resolves with { ok, id, url, error? }; runScript with
+  // { ok, value, error? }, having awaited whatever the script returned.
+  openPage: (url: unknown, options?: { waitFor?: string; timeout?: number }) =>
+    ipcRenderer.invoke('pods:openPage', { url, options }),
+  runScript: (id: unknown, code: unknown) => ipcRenderer.invoke('pods:runScript', { id, code }),
+  closePage: (id: unknown) => ipcRenderer.invoke('pods:closePage', { id })
 })

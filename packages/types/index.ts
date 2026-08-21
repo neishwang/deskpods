@@ -19,11 +19,42 @@ export interface PodGitAccess {
 }
 
 export interface PodSettings {
+  /** Set once the user has answered the scripting permission prompt for this
+   *  Pod: true allows it to drive background pages, false refuses. */
+  scripting?: boolean
   /** Zoom factor applied to the Pod's contents (1 = 100%). Set with
    *  Ctrl+wheel / Ctrl+`+`-`-` inside the Pod and remembered across restarts. */
   zoom?: number
   /** Set once the user has answered the git permission prompt for this Pod. */
   git?: PodGitAccess
+}
+
+/** How `openPage` decides the target site is ready. */
+export interface OpenPageOptions {
+  /** JavaScript expression evaluated in the page until it turns truthy, on top
+   *  of waiting for the load itself — e.g. "typeof _MCS !== 'undefined'".
+   *  Without it, openPage resolves as soon as the page has finished loading. */
+  waitFor?: string
+  /** Milliseconds before giving up on the load or on `waitFor` (default 30000,
+   *  capped at 120000). */
+  timeout?: number
+}
+
+/** Handle on a background page, or the reason it could not be opened. */
+export interface OpenPageResult {
+  ok: boolean
+  /** Pass this to runScript / closePage. */
+  id?: string
+  /** URL actually loaded, after redirects. */
+  url?: string
+  error?: string
+}
+
+/** What a script returned, after a JSON round-trip. */
+export interface ScriptResult {
+  ok: boolean
+  value?: unknown
+  error?: string
 }
 
 /** A git command a Pod's page asks DeskPods to run. */
@@ -177,6 +208,8 @@ export type UiCommand =
   | { type: 'find-in-page' }
   /** A Pod's page asked to run git and has no answer on file yet. */
   | { type: 'git-permission'; id: PodId; origin: string }
+  /** A Pod's page asked to drive a background page and has no answer yet. */
+  | { type: 'scripting-permission'; id: PodId; origin: string; target: string }
   | { type: 'rename-pod'; id: PodId }
   | { type: 'edit-pod-url'; id: PodId }
   | { type: 'folder-settings'; id: FolderId }
@@ -223,6 +256,8 @@ export interface DeskPodsApi {
   /** Answer the git permission prompt for a Pod. `root` is the folder the user
    *  picked; a null root (or allowed=false) records a refusal. */
   resolveGitPermission(id: PodId, allowed: boolean, root: string | null): Promise<void>
+  /** Answer the scripting permission prompt for a Pod. */
+  resolveScriptingPermission(id: PodId, allowed: boolean): Promise<void>
 
   // Tooltips are drawn in a transparent overlay window so they can sit above
   // the Pod's native web view.
@@ -281,6 +316,12 @@ export const IpcChannels = {
   podGit: 'pods:git',
   /** renderer -> main: the user answered the git permission prompt. */
   gitPermission: 'pods:gitPermission',
+  /** Pod page -> main: open / drive / close a background page. */
+  podOpenPage: 'pods:openPage',
+  podRunScript: 'pods:runScript',
+  podClosePage: 'pods:closePage',
+  /** renderer -> main: the user answered the scripting permission prompt. */
+  scriptingPermission: 'pods:scriptingPermission',
   /** Pod page -> main: the web app raised a Notification (via the Pod preload). */
   podNotification: 'pods:notification',
   tooltipShow: 'ui:tooltip:show',

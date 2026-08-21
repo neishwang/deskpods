@@ -118,6 +118,62 @@ execute arbitrary code on your machine, not merely touch a repository. Grant thi
 to a Pod that loads an app you trust, keep such a Pod pointed at that app, and
 revoke it when you no longer need it.
 
+## Driving another site from a Pod
+
+A Pod can use another site as an API: open it once in a hidden page, wait until
+it is ready, run as many scripts as needed against that same loaded document,
+then close it.
+
+```js
+// Open once, and wait for the site to be genuinely ready — not just loaded.
+const page = await window.__deskpods.openPage('https://target.example', {
+  waitFor: "typeof _MCS !== 'undefined'",
+  timeout: 30000
+})
+
+// Several scripts, same document, no reload in between.
+const a = await window.__deskpods.runScript(page.id, "_MCS.getObject('a')")
+const b = await window.__deskpods.runScript(page.id, "_MCS.getObject('b')")
+
+await window.__deskpods.closePage(page.id)
+
+console.log(a.value, b.value)
+```
+
+`openPage(url, options?)` resolves with `{ ok, id, url, error? }`. `waitFor` is a
+JavaScript expression polled in the page until it turns truthy, which is how you
+wait for a global the site installs after load; without it, `openPage` returns as
+soon as the page finishes loading.
+
+`runScript(id, code)` resolves with `{ ok, value, error? }`. The code runs in the
+page's own world, so globals the site defines are reachable, and its result is
+awaited — an API returning a promise gives you the resolved value. A script that
+throws comes back as `ok: false` with the message rather than as a rejection.
+Values travel as JSON, so anything unserialisable (a DOM node, a circular
+object) is reported as an error instead of arriving mangled.
+
+The page keeps its state between calls: set something on `window` in one script
+and the next one still sees it.
+
+### Permission
+
+Like git, the first call raises a one-shot prompt for that Pod, and the answer
+is remembered with it — revocable from the Pod's right-click menu (*Revoke Page
+Scripting*), forgotten when the Pod is deleted. The two permissions are separate:
+granting git does not grant this.
+
+### What it means
+
+The hidden page loads **on the calling Pod's session**, so it is logged in
+wherever that Pod is. That is what makes driving a real site possible, and it is
+also the reason this is gated: it lets a page read cross-origin content that the
+same-origin policy would normally hide from it. The grant covers any site, not
+just the first one asked for.
+
+Practical limits: `http`/`https` only, at most 4 background pages open per Pod,
+each closed automatically after 5 minutes without a script, when its Pod is
+suspended or deleted, and when the permission is revoked.
+
 ## Where your data lives
 
 In a packaged build DeskPods is portable: settings *and* every Pod's Chromium
@@ -160,9 +216,11 @@ Three bundles plus a shared package:
 - `packages/types` — domain models, the typed IPC surface and channel names.
   No Electron import; every new channel starts here.
 - `src/main` — owns all state and all web content: one `WebContentsView` per
-  Pod, native menus, notifications, persistence, the git bridge.
+  Pod, native menus, notifications, persistence, the git bridge and the
+  background pages a Pod can drive.
 - `src/preload` — two bridges: `window.deskpods` for the chrome, and a minimal
-  `window.__deskpods` (notifications + git) injected into Pod pages.
+  `window.__deskpods` (notifications, git, background pages) injected into Pod
+  pages.
 - `src/renderer` — the React chrome (sidebar, dialogs, find bar), plus a second
   tiny renderer in `src/overlay` for what must paint above the Pods.
 

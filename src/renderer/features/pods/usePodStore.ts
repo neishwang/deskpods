@@ -20,6 +20,7 @@ type SidebarDialog =
   | { type: 'edit-pod-url'; id: PodId }
   | { type: 'folder-settings'; id: FolderId }
   | { type: 'git-permission'; id: PodId; origin: string }
+  | { type: 'scripting-permission'; id: PodId; origin: string; target: string }
 
 interface PodStore extends AppState {
   dialog: SidebarDialog | null

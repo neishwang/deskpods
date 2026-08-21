@@ -5,6 +5,7 @@ import { AddPodDialog } from './AddPodDialog'
 import { FolderSettingsDialog } from './FolderSettingsDialog'
 import { GitPermissionDialog } from './GitPermissionDialog'
 import { PromptDialog } from './PromptDialog'
+import { ScriptingPermissionDialog } from './ScriptingPermissionDialog'
 import { normalizeUrl } from './url'
 import { usePodStore } from './usePodStore'
 
@@ -68,5 +69,9 @@ export function DialogsHost(): React.JSX.Element | null {
       return <FolderSettingsDialog id={dialog.id} />
     case 'git-permission':
       return <GitPermissionDialog id={dialog.id} origin={dialog.origin} />
+    case 'scripting-permission':
+      return (
+        <ScriptingPermissionDialog id={dialog.id} origin={dialog.origin} target={dialog.target} />
+      )
   }
 }
