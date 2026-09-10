@@ -14,7 +14,9 @@ import { useRef, useState } from 'react'
 import { usePodStore } from './usePodStore'
 
 /**
- * Asked the first time a Pod's page calls `window.__deskpods.git(...)`.
+ * Asked the first time a Pod's page calls `window.__deskpods.git(...)`, or one
+ * of the file calls that ride with the same grant (`listDir`, `readFile`,
+ * `writeFile` — git already allows as much in that folder).
  *
  * Granting is deliberately two decisions in one: which Pod, and which folder.
  * The answer is remembered with the Pod, so this appears once per Pod — and
@@ -51,7 +53,8 @@ export function GitPermissionDialog({
         <DialogHeader>
           <DialogTitle>Allow “{pod.name}” to run git?</DialogTitle>
           <DialogDescription>
-            This page is asking DeskPods to run git commands on your machine.
+            This page is asking DeskPods to run git commands on your machine, in a folder you
+            choose.
           </DialogDescription>
         </DialogHeader>
 
@@ -71,15 +74,17 @@ export function GitPermissionDialog({
             </Button>
           </div>
           <p className="mt-1.5 text-xs text-[var(--color-muted)]">
-            Commands run in this folder and can never step outside it.
+            Commands run in this folder, and the Pod can read and write files there. Neither can
+            ever step outside it.
           </p>
         </div>
 
         <div className="flex gap-2 rounded-lg border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-3 py-2 text-xs text-[var(--color-muted)]">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#f59e0b]" />
           <span>
-            Any page this Pod loads will be able to run git there, with no further prompt. Only
-            allow it for an app you trust. You can take it back from the Pod’s right-click menu.
+            Any page this Pod loads will be able to run git there — and read or write the files in
+            that folder — with no further prompt. Only allow it for an app you trust. You can take
+            it back from the Pod’s right-click menu.
           </span>
         </div>
 

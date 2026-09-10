@@ -18,6 +18,21 @@ export interface PodGitAccess {
   root?: string
 }
 
+/**
+ * Permission for a Pod's pages to run arbitrary command lines. Kept apart from
+ * `git` on purpose: git is one program, a shell is every program, so this is
+ * asked separately and — by default — narrowed to the program names the user
+ * agreed to. Commands run in the folder granted for git.
+ */
+export interface PodExecAccess {
+  allowed: boolean
+  /** Program names the Pod may run (first word of the command line, without
+   *  folder or `.exe`, lowercased). Absent or empty means every command was
+   *  allowed. With a list, a command line chaining another one (`&`, `|`, `;`,
+   *  redirections…) is refused whatever it starts with. */
+  allow?: string[]
+}
+
 export interface PodSettings {
   /** Set once the user has answered the scripting permission prompt for this
    *  Pod: true allows it to drive background pages, false refuses. */
@@ -25,8 +40,18 @@ export interface PodSettings {
   /** Zoom factor applied to the Pod's contents (1 = 100%). Set with
    *  Ctrl+wheel / Ctrl+`+`-`-` inside the Pod and remembered across restarts. */
   zoom?: number
-  /** Set once the user has answered the git permission prompt for this Pod. */
+  /** Set once the user has answered the git permission prompt for this Pod.
+   *  Also covers reading the granted folder and its files (see listDir /
+   *  readFile / writeFile), which git already allows anyway. */
   git?: PodGitAccess
+  /** Set once the user has answered the exec permission prompt for this Pod. */
+  exec?: PodExecAccess
+  /** Keep this Pod running as if it were on screen: no timer throttling, no
+   *  "hidden" from the Page Visibility API, and its page is loaded shortly
+   *  after startup instead of on first click. For the chat app that would
+   *  otherwise go away and stop notifying. Costs battery and memory, so it is
+   *  opt-in, per Pod. */
+  awake?: boolean
 }
 
 /** How `openPage` decides the target site is ready. */
@@ -76,6 +101,71 @@ export interface GitResult {
   stderr: string
   /** Set when DeskPods declined to run the command at all (no permission,
    *  invalid arguments, path outside the granted folder, git missing…). */
+  error?: string
+}
+
+/** A command line a Pod's page asks DeskPods to run (see PodExecAccess). */
+export interface ExecRequest {
+  /** The whole line, run by the system shell — pipes, `&&` and redirections
+   *  included, which is precisely why it needs its own permission. */
+  command: string
+  /** Optional path RELATIVE to the granted folder, same rule as git. */
+  cwd?: string
+  /** Milliseconds before the command is killed (default 120000, clamped to
+   *  1000…600000). */
+  timeout?: number
+}
+
+/** One entry of a folder listing. */
+export interface DirEntry {
+  name: string
+  directory: boolean
+}
+
+export interface ListDirRequest {
+  /** Optional path RELATIVE to the granted folder; omitted means the folder
+   *  itself. */
+  path?: string
+}
+
+export interface ListDirResult {
+  ok: boolean
+  /** One level only, never recursive. Hidden entries included. */
+  entries: DirEntry[]
+  error?: string
+}
+
+/** How a file's bytes are carried across IPC. */
+export type FileEncoding = 'utf8' | 'base64'
+
+export interface ReadFileRequest {
+  /** Path RELATIVE to the granted folder. */
+  path: string
+  /** Defaults to 'utf8'; use 'base64' for anything binary. */
+  encoding?: FileEncoding
+}
+
+export interface ReadFileResult {
+  ok: boolean
+  content?: string
+  /** Size on disk in bytes (not the length of `content`, which differs in
+   *  base64). */
+  size?: number
+  encoding?: FileEncoding
+  error?: string
+}
+
+export interface WriteFileRequest {
+  /** Path RELATIVE to the granted folder. Missing parent folders are created
+   *  under it. */
+  path: string
+  content: string
+  /** How to decode `content` before writing. Defaults to 'utf8'. */
+  encoding?: FileEncoding
+}
+
+export interface WriteFileResult {
+  ok: boolean
   error?: string
 }
 
@@ -208,6 +298,10 @@ export type UiCommand =
   | { type: 'find-in-page' }
   /** A Pod's page asked to run git and has no answer on file yet. */
   | { type: 'git-permission'; id: PodId; origin: string }
+  /** A Pod's page asked to run a command line that its answer on file does not
+   *  cover. `command` is the line itself: an authorisation asked on a concrete
+   *  case gets decided, asked in the abstract it gets clicked. */
+  | { type: 'exec-permission'; id: PodId; origin: string; command: string }
   /** A Pod's page asked to drive a background page and has no answer yet. */
   | { type: 'scripting-permission'; id: PodId; origin: string; target: string }
   | { type: 'rename-pod'; id: PodId }
@@ -256,6 +350,10 @@ export interface DeskPodsApi {
   /** Answer the git permission prompt for a Pod. `root` is the folder the user
    *  picked; a null root (or allowed=false) records a refusal. */
   resolveGitPermission(id: PodId, allowed: boolean, root: string | null): Promise<void>
+  /** Answer the exec permission prompt for a Pod. `allow` is the list of
+   *  program names granted (added to whatever was already granted); pass null
+   *  to allow every command. Ignored when `allowed` is false. */
+  resolveExecPermission(id: PodId, allowed: boolean, allow: string[] | null): Promise<void>
   /** Answer the scripting permission prompt for a Pod. */
   resolveScriptingPermission(id: PodId, allowed: boolean): Promise<void>
 
@@ -316,6 +414,15 @@ export const IpcChannels = {
   podGit: 'pods:git',
   /** renderer -> main: the user answered the git permission prompt. */
   gitPermission: 'pods:gitPermission',
+  /** Pod page -> main: run a command line (see PodExecAccess). */
+  podExec: 'pods:exec',
+  /** renderer -> main: the user answered the exec permission prompt. */
+  execPermission: 'pods:execPermission',
+  /** Pod page -> main: read the granted folder and the files in it. Covered by
+   *  the git permission, which already allows as much. */
+  podListDir: 'pods:listDir',
+  podReadFile: 'pods:readFile',
+  podWriteFile: 'pods:writeFile',
   /** Pod page -> main: open / drive / close a background page. */
   podOpenPage: 'pods:openPage',
   podRunScript: 'pods:runScript',

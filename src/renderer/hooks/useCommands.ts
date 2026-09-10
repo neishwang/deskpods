@@ -29,6 +29,14 @@ export function useCommands(): (command: UiCommand) => void {
       case 'git-permission':
         store.setDialog({ type: 'git-permission', id: command.id, origin: command.origin })
         break
+      case 'exec-permission':
+        store.setDialog({
+          type: 'exec-permission',
+          id: command.id,
+          origin: command.origin,
+          command: command.command
+        })
+        break
       case 'scripting-permission':
         store.setDialog({
           type: 'scripting-permission',

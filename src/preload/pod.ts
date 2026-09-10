@@ -9,15 +9,17 @@ import { contextBridge, ipcRenderer } from 'electron'
  *
  * Nothing else from Node/Electron is exposed to untrusted Pod content.
  *
- * It also exposes `git()`, the bridge a locally hosted app can use to run git
- * commands. Calling it costs the page nothing by itself: main asks the user to
- * authorise THIS Pod (and pick the folder to work in) the first time, and
- * refuses every call until that answer exists.
+ * It also exposes `git()`, `exec()` and the file calls — the bridge a locally
+ * hosted app can use to reach the machine. Calling them costs the page nothing
+ * by itself: main asks the user to authorise THIS Pod (and pick the folder to
+ * work in) the first time, and refuses every call until that answer exists.
+ * `exec` is asked separately, on the command it is about to run.
  *
  * NOTE: kept self-contained (no `@types` import) on purpose. A sandboxed preload
  * cannot `require` a shared chunk, so sharing code with `preload/index.ts` would
  * make Rollup split out a chunk and break BOTH preloads at runtime. The channel
- * strings must stay in sync with `IpcChannels.podNotification` / `.podGit`.
+ * strings must stay in sync with `IpcChannels.podNotification`, `.podGit`,
+ * `.podExec`, `.podListDir`, `.podReadFile` and `.podWriteFile`.
  */
 contextBridge.exposeInMainWorld('__deskpods', {
   // Payload: { title, body?, icon? } captured from the wrapped Notification, so
@@ -29,6 +31,26 @@ contextBridge.exposeInMainWorld('__deskpods', {
   // Resolves with { ok, code, stdout, stderr, error? }.
   git: (args: unknown, options?: { cwd?: string }) =>
     ipcRenderer.invoke('pods:git', { args, cwd: options?.cwd }),
+
+  // Run a command line through the system shell, in the same folder. Needs its
+  // own permission (git is one program, a shell is every program) and resolves
+  // with the same { ok, code, stdout, stderr, error? } as `git`.
+  exec: (command: unknown, options?: { cwd?: string; timeout?: number }) =>
+    ipcRenderer.invoke('pods:exec', {
+      command,
+      cwd: options?.cwd,
+      timeout: options?.timeout
+    }),
+
+  // Read and write inside the folder granted for git — the same paths, relative
+  // to it. listDir resolves with { ok, entries: [{ name, directory }], error? },
+  // one level only; readFile with { ok, content, size, encoding, error? }
+  // ('utf8' by default, 'base64' for binary); writeFile with { ok, error? }.
+  listDir: (path: unknown) => ipcRenderer.invoke('pods:listDir', { path }),
+  readFile: (path: unknown, options?: { encoding?: 'utf8' | 'base64' }) =>
+    ipcRenderer.invoke('pods:readFile', { path, encoding: options?.encoding }),
+  writeFile: (path: unknown, content: unknown, options?: { encoding?: 'utf8' | 'base64' }) =>
+    ipcRenderer.invoke('pods:writeFile', { path, content, encoding: options?.encoding }),
 
   // Drive a site in a hidden page on this Pod's session: open it once, run as
   // many scripts as needed against that same loaded document, then close it.

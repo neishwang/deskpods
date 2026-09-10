@@ -1,17 +1,24 @@
 import { join } from 'node:path'
 import {
+  type ExecRequest,
   type FindOptions,
   type FindResult,
   type GitRequest,
   type GitResult,
   IpcChannels,
+  type ListDirRequest,
+  type ListDirResult,
   type OpenPageOptions,
   type OpenPageResult,
   type Pod,
   type PodId,
   type PodNotifyPayload,
+  type ReadFileRequest,
+  type ReadFileResult,
   type Rect,
-  type ScriptResult
+  type ScriptResult,
+  type WriteFileRequest,
+  type WriteFileResult
 } from '@types'
 import {
   type BrowserWindow,
@@ -143,6 +150,12 @@ export class PodManager {
   onFindResult?: (id: PodId, result: FindResult) => void
   /** Set by the IPC layer: the Pod's page asked to run a git command. */
   onGitRequest?: (id: PodId, request: GitRequest) => Promise<GitResult>
+  /** Set by the IPC layer: the Pod's page asked to run a command line. */
+  onExecRequest?: (id: PodId, request: ExecRequest) => Promise<GitResult>
+  /** Set by the IPC layer: the Pod's page asked to read the granted folder. */
+  onListDirRequest?: (id: PodId, request: ListDirRequest) => Promise<ListDirResult>
+  onReadFileRequest?: (id: PodId, request: ReadFileRequest) => Promise<ReadFileResult>
+  onWriteFileRequest?: (id: PodId, request: WriteFileRequest) => Promise<WriteFileResult>
   /** Set by the IPC layer: the Pod's page wants to drive a background page. */
   onOpenPage?: (id: PodId, url: string, options?: OpenPageOptions) => Promise<OpenPageResult>
   onRunScript?: (id: PodId, handle: string, code: string) => Promise<ScriptResult>
@@ -188,7 +201,14 @@ export class PodManager {
         preload: join(__dirname, '../preload/pod.js'),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true
+        sandbox: true,
+        // Only the active Pod is visible, so every other one is "backgrounded":
+        // Chromium slows its timers and tells the page it is hidden, which is
+        // exactly how a chat app decides to go away and drop its connection.
+        // Keep Awake opts a Pod out of that, at the window's expense (see
+        // setAwake). Off by default: a Pod that nobody watches should cost
+        // nothing.
+        backgroundThrottling: pod.settings?.awake !== true
       }
     })
     this.window.contentView.addChildView(view)
@@ -237,6 +257,47 @@ export class PodManager {
       }
       return handler(pod.id, request ?? { args: [] })
     })
+
+    // Command lines, and the folder/file reads that ride with the git grant.
+    // Same per-Pod scoping: the request always carries the Pod it came from.
+    wc.ipc.handle(IpcChannels.podExec, (_e, request: ExecRequest): Promise<GitResult> => {
+      const handler = this.onExecRequest
+      if (!handler) {
+        return Promise.resolve({
+          ok: false,
+          code: -1,
+          stdout: '',
+          stderr: '',
+          error: 'Command bridge unavailable.'
+        })
+      }
+      return handler(pod.id, request ?? { command: '' })
+    })
+
+    wc.ipc.handle(IpcChannels.podListDir, (_e, request: ListDirRequest): Promise<ListDirResult> => {
+      const handler = this.onListDirRequest
+      if (!handler)
+        return Promise.resolve({ ok: false, entries: [], error: 'File bridge unavailable.' })
+      return handler(pod.id, request ?? {})
+    })
+
+    wc.ipc.handle(
+      IpcChannels.podReadFile,
+      (_e, request: ReadFileRequest): Promise<ReadFileResult> => {
+        const handler = this.onReadFileRequest
+        if (!handler) return Promise.resolve({ ok: false, error: 'File bridge unavailable.' })
+        return handler(pod.id, request ?? { path: '' })
+      }
+    )
+
+    wc.ipc.handle(
+      IpcChannels.podWriteFile,
+      (_e, request: WriteFileRequest): Promise<WriteFileResult> => {
+        const handler = this.onWriteFileRequest
+        if (!handler) return Promise.resolve({ ok: false, error: 'File bridge unavailable.' })
+        return handler(pod.id, request ?? { path: '', content: '' })
+      }
+    )
 
     // Background pages: same per-Pod scoping as the git bridge.
     wc.ipc.handle(
@@ -562,6 +623,35 @@ export class PodManager {
   setOverlay(active: boolean): void {
     this.overlay = active
     this.syncActiveVisibility()
+  }
+
+  /**
+   * Load a Pod without showing it (Keep Awake). Its view is created exactly as
+   * a click would create it — invisible until `activate` — so the app inside is
+   * connected, and can raise notifications, before it has ever been opened.
+   * No-op once the view exists.
+   */
+  wake(id: PodId): void {
+    const pod = this.podsById.get(id)
+    if (!pod) return
+    const view = this.ensureView(pod)
+    // Lay it out at the workspace size even though it stays invisible: a page
+    // given a 0×0 viewport can decide it has nothing to render, and a chat app
+    // that renders nothing is halfway to being asleep again.
+    if (this.activeId !== id) view.setBounds(this.bounds)
+  }
+
+  /**
+   * Turn Keep Awake on or off on a Pod that is already live, so the answer
+   * takes effect without reloading the page.
+   *
+   * Caveat worth knowing: since Electron 28, a single WebContents with
+   * throttling disabled stops frame throttling for the WHOLE window, other Pods
+   * included. One awake Pod therefore costs the window, not just itself.
+   */
+  setAwake(id: PodId, awake: boolean): void {
+    const wc = this.views.get(id)?.webContents
+    if (wc && !wc.isDestroyed()) wc.setBackgroundThrottling(!awake)
   }
 
   /** Free the renderer/GPU cost of a Pod while keeping its session on disk. */

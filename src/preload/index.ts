@@ -51,6 +51,8 @@ const api: DeskPodsApi = {
   pickFolder: () => ipcRenderer.invoke(IpcChannels.pickFolder),
   resolveGitPermission: (id: PodId, allowed: boolean, root: string | null) =>
     ipcRenderer.invoke(IpcChannels.gitPermission, id, allowed, root),
+  resolveExecPermission: (id: PodId, allowed: boolean, allow: string[] | null) =>
+    ipcRenderer.invoke(IpcChannels.execPermission, id, allowed, allow),
   resolveScriptingPermission: (id: PodId, allowed: boolean) =>
     ipcRenderer.invoke(IpcChannels.scriptingPermission, id, allowed),
   showTooltip: (payload: TooltipPayload) => ipcRenderer.invoke(IpcChannels.tooltipShow, payload),

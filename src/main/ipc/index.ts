@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { listDirectory, readFileAt, writeFileAt } from '@main/files'
 import { isValidArgs, resolveWorkingDirectory, runGit } from '@main/git'
 import { cleanTitle, setTaskbarBadge, titleUnreadCount } from '@main/notifications'
 import { saveState } from '@main/persistence/store'
 import type { PodManager } from '@main/pods/PodManager'
 import { BackgroundPages } from '@main/scripting'
+import { commandName, isAllowedCommand, isValidCommand, runCommand } from '@main/shellCommand'
 import { createHitAreaTracker } from '@main/windows/overlayWindow'
 import {
   type AppState,
   type CreatePodInput,
+  type ExecRequest,
   type FindOptions,
   type Folder,
   type FolderId,
@@ -18,18 +21,25 @@ import {
   type GitRequest,
   type GitResult,
   IpcChannels,
+  type ListDirRequest,
+  type ListDirResult,
   type OpenPageOptions,
   type OpenPageResult,
   type OverlayToast,
   type Pod,
+  type PodExecAccess,
   type PodGitAccess,
   type PodId,
   type PodPatch,
   type PodPlacement,
+  type ReadFileRequest,
+  type ReadFileResult,
   type Rect,
   type ScriptResult,
   type TooltipPayload,
-  type UiCommand
+  type UiCommand,
+  type WriteFileRequest,
+  type WriteFileResult
 } from '@types'
 import {
   type BrowserWindow,
@@ -163,6 +173,7 @@ export function registerIpc(
 
   const removePod = (id: PodId) => {
     settleGitPrompt(id, { allowed: false })
+    settleExecPrompt(id, { allowed: false })
     settleScriptingPrompt(id, false)
     pages.closeAllFor(id)
     state.pods = state.pods.filter((p) => p.id !== id)
@@ -246,22 +257,114 @@ export function registerIpc(
     pending.answer(grant)
   }
 
-  pods.onGitRequest = async (id, request: GitRequest): Promise<GitResult> => {
+  /** The folder granted to this Pod, asking the user if they never answered.
+   *  Null when the Pod is unknown or access was refused. */
+  const grantedRoot = async (id: PodId): Promise<string | null> => {
     const pod = state.pods.find((p) => p.id === id)
-    if (!pod) return refuse('Unknown Pod.')
+    if (!pod) return null
+    const grant = pod.settings?.git ?? (await askGitAccess(id))
+    return grant.allowed && grant.root ? grant.root : null
+  }
+
+  pods.onGitRequest = async (id, request: GitRequest): Promise<GitResult> => {
     if (!isValidArgs(request?.args)) {
       return refuse('git expects a non-empty array of string arguments.')
     }
 
-    const grant = pod.settings?.git ?? (await askGitAccess(id))
-    if (!grant.allowed || !grant.root) {
-      return refuse('This Pod is not allowed to run git commands.')
-    }
+    const root = await grantedRoot(id)
+    if (!root) return refuse('This Pod is not allowed to run git commands.')
 
-    const cwd = resolveWorkingDirectory(grant.root, request.cwd)
+    const cwd = resolveWorkingDirectory(root, request.cwd)
     if (!cwd) return refuse('Working directory outside the folder granted to this Pod.')
 
     return runGit(request.args, cwd)
+  }
+
+  // --- folder & file reads ----------------------------------------------
+  // Under the git grant, not a permission of their own: a Pod that may run git
+  // in a folder can already list it, read what is tracked and rewrite the tree.
+  pods.onListDirRequest = async (id, request: ListDirRequest): Promise<ListDirResult> => {
+    const root = await grantedRoot(id)
+    if (!root) return { ok: false, entries: [], error: 'This Pod has no folder granted to it.' }
+    return listDirectory(root, request?.path)
+  }
+
+  pods.onReadFileRequest = async (id, request: ReadFileRequest): Promise<ReadFileResult> => {
+    const root = await grantedRoot(id)
+    if (!root) return { ok: false, error: 'This Pod has no folder granted to it.' }
+    return readFileAt(root, request?.path, request?.encoding ?? 'utf8')
+  }
+
+  pods.onWriteFileRequest = async (id, request: WriteFileRequest): Promise<WriteFileResult> => {
+    const root = await grantedRoot(id)
+    if (!root) return { ok: false, error: 'This Pod has no folder granted to it.' }
+    return writeFileAt(root, request?.path, request?.content, request?.encoding ?? 'utf8')
+  }
+
+  // --- command bridge ---------------------------------------------------
+  // Its own permission, and by default its own allow-list of program names: git
+  // is one program, a shell is every program, and confining the working
+  // directory changes nothing when the command line can name a path itself.
+  const execPrompts = new Map<
+    PodId,
+    { promise: Promise<PodExecAccess>; answer: (g: PodExecAccess) => void }
+  >()
+
+  /** Ask about THIS command line, or join the prompt already on screen. */
+  const askExecAccess = (id: PodId, command: string): Promise<PodExecAccess> => {
+    const pending = execPrompts.get(id)
+    if (pending) return pending.promise
+
+    let answer!: (grant: PodExecAccess) => void
+    const promise = new Promise<PodExecAccess>((resolve) => {
+      answer = resolve
+    })
+    execPrompts.set(id, { promise, answer })
+    send(IpcChannels.uiCommand, {
+      type: 'exec-permission',
+      id,
+      origin: pods.urlOf(id),
+      command
+    })
+    return promise
+  }
+
+  const settleExecPrompt = (id: PodId, grant: PodExecAccess) => {
+    const pending = execPrompts.get(id)
+    if (!pending) return
+    execPrompts.delete(id)
+    pending.answer(grant)
+  }
+
+  pods.onExecRequest = async (id, request: ExecRequest): Promise<GitResult> => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod) return refuse('Unknown Pod.')
+    if (!isValidCommand(request?.command)) {
+      return refuse('exec expects a non-empty command line.')
+    }
+    const command = request.command
+
+    // A refusal on file is final. A grant that does not cover THIS command
+    // (allow-list) asks again about it, rather than failing silently.
+    let grant = pod.settings?.exec
+    if (!grant) grant = await askExecAccess(id, command)
+    else if (grant.allowed && !isAllowedCommand(command, grant.allow)) {
+      grant = await askExecAccess(id, command)
+    }
+
+    if (!grant.allowed) return refuse('This Pod is not allowed to run commands.')
+    if (!isAllowedCommand(command, grant.allow)) {
+      return refuse(`This Pod is not allowed to run “${commandName(command)}”.`)
+    }
+
+    // Commands run in the folder granted for git: one folder per Pod, one rule.
+    const root = await grantedRoot(id)
+    if (!root) return refuse('This Pod has no folder to run commands in.')
+
+    const cwd = resolveWorkingDirectory(root, request.cwd)
+    if (!cwd) return refuse('Working directory outside the folder granted to this Pod.')
+
+    return runCommand(command, cwd, request.timeout)
   }
 
   // --- background pages -------------------------------------------------
@@ -341,11 +444,9 @@ export function registerIpc(
   pods.onZoom = (id, zoom) => {
     const pod = state.pods.find((p) => p.id === id)
     if (!pod) return
-    if (zoom === 1) {
-      pod.settings = undefined
-    } else {
-      pod.settings = { ...pod.settings, zoom }
-    }
+    // Back to 100% drops the saved factor only — the Pod's other settings (git,
+    // exec, scripting, Keep Awake) have nothing to do with zoom.
+    pod.settings = { ...pod.settings, zoom: zoom === 1 ? undefined : zoom }
     persist()
 
     // Flash the level above the page, the way a browser does. It goes to the
@@ -355,6 +456,21 @@ export function registerIpc(
       overlay.webContents.send(IpcChannels.zoomIndicator, Math.round(zoom * 100))
     }
   }
+
+  // --- Keep Awake -------------------------------------------------------
+  // Pods marked awake are loaded without being shown, so the app inside is
+  // connected — and can notify — before it has ever been clicked. Deferred:
+  // the point of startup is DeskPods' own window appearing, not a background
+  // Pod competing with it for the first seconds. One timer, once, no polling.
+  const AWAKE_DELAY_MS = 4_000
+  window.webContents.once('did-finish-load', () => {
+    setTimeout(() => {
+      if (window.isDestroyed()) return
+      for (const pod of state.pods) {
+        if (pod.settings?.awake) pods.wake(pod.id)
+      }
+    }, AWAKE_DELAY_MS).unref()
+  })
 
   // Mouse back/forward buttons drive the active Pod's history, like a browser.
   window.on('app-command', (_e, command) => {
@@ -519,6 +635,31 @@ export function registerIpc(
     }
   )
 
+  ipcMain.handle(
+    IpcChannels.execPermission,
+    (_e, id: PodId, allowed: boolean, allow: string[] | null): void => {
+      const pod = state.pods.find((p) => p.id === id)
+      // A null list means "every command"; a list adds to what was already
+      // granted, so answering a second prompt widens the set instead of
+      // replacing it.
+      const previous = pod?.settings?.exec
+      const widerAlready = previous?.allowed === true && !previous.allow?.length
+      const merged =
+        allow === null || widerAlready
+          ? undefined
+          : [...new Set([...(previous?.allowed ? (previous.allow ?? []) : []), ...allow])]
+      const grant: PodExecAccess = allowed
+        ? { allowed: true, ...(merged && merged.length > 0 ? { allow: merged } : {}) }
+        : { allowed: false }
+
+      if (pod) {
+        pod.settings = { ...pod.settings, exec: grant }
+        persist()
+      }
+      settleExecPrompt(id, grant)
+    }
+  )
+
   ipcMain.handle(IpcChannels.scriptingPermission, (_e, id: PodId, allowed: boolean): void => {
     const pod = state.pods.find((p) => p.id === id)
     if (pod) {
@@ -532,7 +673,7 @@ export function registerIpc(
   ipcMain.handle(IpcChannels.pickFolder, async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog(window, {
       properties: ['openDirectory'],
-      title: 'Choose the folder this Pod may run git in'
+      title: 'Choose the folder this Pod may run git and read files in'
     })
     return result.filePaths[0] ?? null
   })
@@ -668,6 +809,20 @@ export function registerIpc(
             { type: 'separator' } as MenuItemConstructorOptions
           ]
         : []),
+      ...(pod.settings?.exec
+        ? [
+            {
+              label: pod.settings.exec.allowed
+                ? 'Revoke Command Access'
+                : 'Reset Command Permission',
+              click: () => {
+                pod.settings = { ...pod.settings, exec: undefined }
+                pushState()
+              }
+            },
+            { type: 'separator' } as MenuItemConstructorOptions
+          ]
+        : []),
       // Only worth showing when the Pod is actually zoomed.
       ...(zoom && zoom !== 1
         ? [
@@ -676,9 +831,10 @@ export function registerIpc(
               click: () => {
                 pods.resetZoom(id)
                 // A suspended Pod has no view to reset, so drop the saved
-                // factor here as well.
+                // factor here as well — the factor only, not the whole
+                // settings object.
                 if (pod.settings?.zoom) {
-                  pod.settings = undefined
+                  pod.settings = { ...pod.settings, zoom: undefined }
                   persist()
                 }
               }
@@ -686,6 +842,26 @@ export function registerIpc(
             { type: 'separator' } as MenuItemConstructorOptions
           ]
         : []),
+      {
+        // Chromium backgrounds every Pod but the active one: timers slow down
+        // and the page is told it is hidden, which is how a chat app decides to
+        // go away. This opts the Pod out, and loads it at startup rather than
+        // on first click. It costs battery — hence a choice, not a default.
+        label: 'Keep Awake',
+        type: 'checkbox',
+        checked: pod.settings?.awake === true,
+        click: () => {
+          const awake = pod.settings?.awake !== true
+          pod.settings = { ...pod.settings, awake: awake || undefined }
+          persist()
+          // A live view is switched over on the spot; a suspended one is woken
+          // now, so turning this on does what it says without a click.
+          if (awake) pods.wake(id)
+          pods.setAwake(id, awake)
+          pushState()
+        }
+      },
+      { type: 'separator' },
       {
         // Free the Pod's renderer/GPU cost now; its session stays on disk and
         // the next click reloads it. Only meaningful when a live view exists.

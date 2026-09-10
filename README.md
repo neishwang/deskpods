@@ -63,6 +63,16 @@ reload.
 they become themed toasts above the page, and the taskbar icon carries the total
 unread count (read from page titles, e.g. `(3) Discord`).
 
+**Keep Awake.** Only the Pod on screen is visible, so Chromium backgrounds the
+others: their timers slow down and the page is told it is hidden — which is how
+a chat app decides you are away and drops its connection. *Keep Awake* in a
+Pod's right-click menu opts that Pod out, and loads it a few seconds after
+startup instead of on first click, so it is connected and notifying before you
+have opened it. It costs battery and memory (and, Electron being what it is, one
+awake Pod stops frame throttling for the whole window), which is why it is off
+by default and set per Pod. *Suspend* still wins: it closes the page until the
+next click, awake or not.
+
 ## Running git from a Pod
 
 A locally hosted app can drive git through DeskPods, so a page can offer buttons
@@ -117,6 +127,67 @@ and some git flags run other programs by design — `git -c core.pager=<program>
 execute arbitrary code on your machine, not merely touch a repository. Grant this
 to a Pod that loads an app you trust, keep such a Pod pointed at that app, and
 revoke it when you no longer need it.
+
+## Reading files from a Pod
+
+The folder you granted for git is also readable — and writable — through three
+calls, because a Pod that may run git there can already list it, read what is
+tracked and rewrite the tree with a checkout. No extra prompt: the same grant,
+the same folder, the same confinement.
+
+```js
+// One level of the folder, never recursive. Hidden entries included.
+const { ok, entries } = await window.__deskpods.listDir('.')
+// entries: [{ name: 'deskpods', directory: true }, { name: 'app.json', directory: false }]
+
+// Text by default, base64 for anything binary.
+const file = await window.__deskpods.readFile('config/app.json')
+const data = JSON.parse(file.content)
+const logo = await window.__deskpods.readFile('assets/logo.png', { encoding: 'base64' })
+
+// Writing creates missing parent folders, inside the granted one only.
+await window.__deskpods.writeFile('config/app.json', JSON.stringify(data, null, 2))
+```
+
+`listDir` resolves with `{ ok, entries, error? }`, `readFile` with
+`{ ok, content, size, encoding, error? }` (files over 16 MB are refused), and
+`writeFile` with `{ ok, error? }`. A missing file or a path outside the granted
+folder is an `ok: false` answer, never a rejected promise.
+
+## Running a command from a Pod
+
+Anything that is not git — a build, a deployment script, an archiver — goes
+through `exec`, which runs a real command line through the system shell:
+
+```js
+const result = await window.__deskpods.exec('dotnet build -c Release')
+// { ok, code, stdout, stderr, error? } — the same shape as git()
+
+await window.__deskpods.exec('npm ci', { cwd: 'web', timeout: 300000 })
+```
+
+`cwd` is relative to the folder granted for git, like everywhere else, and
+`timeout` is clamped to 1 s … 10 min (120 s by default). Output is capped at
+16 MB, and no console window flashes on screen.
+
+### Permission
+
+This one is asked separately from git, and on the command itself: git is one
+program, a shell is every program, and confining the working directory changes
+nothing when a command line can name an absolute path of its own.
+
+The prompt shows the exact line the page wants to run and offers two grants:
+
+- **Allow “dotnet”** — only that program. DeskPods asks again the first time the
+  Pod reaches for another one, and adds it to the list if you agree. While a
+  list is in force, a line chaining a second command (`&`, `&&`, `|`, `;`, a
+  redirection, `$(…)`, a backquote or a newline) is refused whatever it starts
+  with, so `dotnet & rmdir /s /q data` does not slip through.
+- **Allow every command** — the Pod may run anything you can run. A Pod is a web
+  site; this hands it the machine, not a folder.
+
+Denying is remembered too, and *Revoke Command Access* / *Reset Command
+Permission* in the Pod's right-click menu makes the next call ask again.
 
 ## Driving another site from a Pod
 
@@ -216,10 +287,11 @@ Three bundles plus a shared package:
 - `packages/types` — domain models, the typed IPC surface and channel names.
   No Electron import; every new channel starts here.
 - `src/main` — owns all state and all web content: one `WebContentsView` per
-  Pod, native menus, notifications, persistence, the git bridge and the
-  background pages a Pod can drive.
+  Pod, native menus, notifications, persistence, the git / command / file
+  bridges and the background pages a Pod can drive.
 - `src/preload` — two bridges: `window.deskpods` for the chrome, and a minimal
-  `window.__deskpods` (notifications, git, background pages) injected into Pod
+  `window.__deskpods` (notifications, git, commands, files, background
+  pages) injected into Pod
   pages.
 - `src/renderer` — the React chrome (sidebar, dialogs, find bar), plus a second
   tiny renderer in `src/overlay` for what must paint above the Pods.

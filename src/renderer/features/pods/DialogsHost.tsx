@@ -2,6 +2,7 @@ import { ipc } from '@renderer/lib/ipc'
 import type { PodId } from '@types'
 import { useEffect } from 'react'
 import { AddPodDialog } from './AddPodDialog'
+import { ExecPermissionDialog } from './ExecPermissionDialog'
 import { FolderSettingsDialog } from './FolderSettingsDialog'
 import { GitPermissionDialog } from './GitPermissionDialog'
 import { PromptDialog } from './PromptDialog'
@@ -69,6 +70,8 @@ export function DialogsHost(): React.JSX.Element | null {
       return <FolderSettingsDialog id={dialog.id} />
     case 'git-permission':
       return <GitPermissionDialog id={dialog.id} origin={dialog.origin} />
+    case 'exec-permission':
+      return <ExecPermissionDialog id={dialog.id} origin={dialog.origin} command={dialog.command} />
     case 'scripting-permission':
       return (
         <ScriptingPermissionDialog id={dialog.id} origin={dialog.origin} target={dialog.target} />
