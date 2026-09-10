@@ -186,7 +186,10 @@ For anything that runs longer than an answer — an agent session, a build, a
 deployment — start it and follow it:
 
 ```js
-const { id } = await window.__deskpods.execStart('cursor-agent -p "fix the failing test"')
+const { id } = await window.__deskpods.execStart(
+  'cursor-agent -p --force --output-format json "fix the failing test"',
+  { cwd: 'my-repo' }
+)
 
 for (;;) {
   const step = await window.__deskpods.execPoll(id)
@@ -202,13 +205,35 @@ await window.__deskpods.execKill(id)            // ...or stop it early
 `{ ok, running, stdout, stderr, code?, truncated?, error? }` — each poll carries
 only what was printed since the previous one, so appending them in order gives
 the whole output. `truncated` says output had to be dropped because nothing
-polled for too long. The default limit is 30 minutes (up to 24 h via `timeout`),
+polled for 4 MB. The default limit is 30 minutes (up to 24 h via `timeout`),
 four commands at a time per Pod, and everything a Pod started is killed when it
 is suspended, when Command Access is revoked, and when DeskPods quits — down the
 whole process tree, so nothing carries on unseen.
 
 Because the page polls rather than subscribing, a page that reloads mid-command
-finds it again with its id instead of losing an event stream.
+finds it again with its id instead of losing an event stream. A finished command
+is kept for ten minutes so its last poll still carries the exit code; after that
+its id is forgotten and polling answers `Unknown command.`
+
+Two things to know when the command is an agent or any interactive tool:
+
+- **stdin is closed behind you**, whether you passed one or not. A tool that
+  stops to ask for confirmation will never get an answer and will sit there
+  until its timeout — so run it in whatever non-interactive mode it offers
+  (`--force` for `cursor-agent`, `-q` for `keepassxc-cli`, `--yes`, `--no-input`
+  and friends elsewhere).
+- **a poll hands over bytes, not lines.** It returns whatever arrived since the
+  previous one, which can end mid-line. Parsing line-delimited output (NDJSON,
+  say) means keeping the tail until its newline arrives:
+
+```js
+let rest = ''
+// on every poll:
+rest += step.stdout
+const lines = rest.split('\n')
+rest = lines.pop() ?? ''            // the last one may still be incomplete
+for (const line of lines) if (line.trim()) handle(JSON.parse(line))
+```
 
 ### Permission
 
