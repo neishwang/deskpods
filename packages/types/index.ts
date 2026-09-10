@@ -112,8 +112,47 @@ export interface ExecRequest {
   /** Optional path RELATIVE to the granted folder, same rule as git. */
   cwd?: string
   /** Milliseconds before the command is killed (default 120000, clamped to
-   *  1000…600000). */
+   *  1000…600000; for `execStart`, default 1800000 and up to 24 h). */
   timeout?: number
+  /** Written to the command's standard input, which is then closed. This is
+   *  where a secret goes — a master password on the command line would be
+   *  shown in the permission dialog and listed by anything that can read the
+   *  machine's processes. */
+  stdin?: string
+}
+
+/** Handle on a command left running, or the reason it could not start. */
+export interface ExecStartResult {
+  ok: boolean
+  /** Pass this to execPoll / execKill. */
+  id?: string
+  error?: string
+}
+
+/** How a running command is doing, and what it printed since the last poll. */
+export interface ExecPollResult {
+  ok: boolean
+  /** False once the command has exited (or was killed). */
+  running: boolean
+  /** Output produced SINCE the previous poll — never repeated. */
+  stdout: string
+  stderr: string
+  /** Exit code, once it has finished. */
+  code?: number
+  /** Set when output had to be dropped because nobody polled fast enough. */
+  truncated?: boolean
+  /** Set when the command could not run, timed out, or was killed. */
+  error?: string
+}
+
+export interface ExecHandleRequest {
+  /** The id returned by execStart. */
+  id: string
+}
+
+export interface ExecKillResult {
+  ok: boolean
+  error?: string
 }
 
 /** One entry of a folder listing. */
@@ -416,6 +455,11 @@ export const IpcChannels = {
   gitPermission: 'pods:gitPermission',
   /** Pod page -> main: run a command line (see PodExecAccess). */
   podExec: 'pods:exec',
+  /** Pod page -> main: start a command that outlives one answer, then follow
+   *  it (an agent session, a long build) and stop it. */
+  podExecStart: 'pods:execStart',
+  podExecPoll: 'pods:execPoll',
+  podExecKill: 'pods:execKill',
   /** renderer -> main: the user answered the exec permission prompt. */
   execPermission: 'pods:execPermission',
   /** Pod page -> main: read the granted folder and the files in it. Covered by

@@ -19,7 +19,8 @@ import { contextBridge, ipcRenderer } from 'electron'
  * cannot `require` a shared chunk, so sharing code with `preload/index.ts` would
  * make Rollup split out a chunk and break BOTH preloads at runtime. The channel
  * strings must stay in sync with `IpcChannels.podNotification`, `.podGit`,
- * `.podExec`, `.podListDir`, `.podReadFile` and `.podWriteFile`.
+ * `.podExec`, `.podExecStart`/`.podExecPoll`/`.podExecKill`, `.podListDir`,
+ * `.podReadFile` and `.podWriteFile`.
  */
 contextBridge.exposeInMainWorld('__deskpods', {
   // Payload: { title, body?, icon? } captured from the wrapped Notification, so
@@ -35,12 +36,29 @@ contextBridge.exposeInMainWorld('__deskpods', {
   // Run a command line through the system shell, in the same folder. Needs its
   // own permission (git is one program, a shell is every program) and resolves
   // with the same { ok, code, stdout, stderr, error? } as `git`.
-  exec: (command: unknown, options?: { cwd?: string; timeout?: number }) =>
+  // `options.stdin` is written to the command's standard input, which is then
+  // closed — that is where a secret goes, never on the command line.
+  exec: (command: unknown, options?: { cwd?: string; timeout?: number; stdin?: string }) =>
     ipcRenderer.invoke('pods:exec', {
       command,
       cwd: options?.cwd,
-      timeout: options?.timeout
+      timeout: options?.timeout,
+      stdin: options?.stdin
     }),
+
+  // The same command, when it outlives a single answer (an agent session, a
+  // long build): start it, follow it, stop it. execStart resolves with
+  // { ok, id, error? }; execPoll with { ok, running, stdout, stderr, code?,
+  // truncated?, error? }, carrying only what was printed SINCE the last poll.
+  execStart: (command: unknown, options?: { cwd?: string; timeout?: number; stdin?: string }) =>
+    ipcRenderer.invoke('pods:execStart', {
+      command,
+      cwd: options?.cwd,
+      timeout: options?.timeout,
+      stdin: options?.stdin
+    }),
+  execPoll: (id: unknown) => ipcRenderer.invoke('pods:execPoll', { id }),
+  execKill: (id: unknown) => ipcRenderer.invoke('pods:execKill', { id }),
 
   // Read and write inside the folder granted for git — the same paths, relative
   // to it. listDir resolves with { ok, entries: [{ name, directory }], error? },

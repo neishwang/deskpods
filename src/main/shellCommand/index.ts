@@ -69,11 +69,16 @@ export function isAllowedCommand(command: string, allow?: string[]): boolean {
   return name.length > 0 && allow.includes(name)
 }
 
-export function runCommand(command: string, cwd: string, timeout?: number): Promise<GitResult> {
+export function runCommand(
+  command: string,
+  cwd: string,
+  timeout?: number,
+  stdin?: string
+): Promise<GitResult> {
   const limit = Math.min(Math.max(timeout ?? TIMEOUT_MS, MIN_TIMEOUT_MS), MAX_TIMEOUT_MS)
 
   return new Promise((done) => {
-    exec(
+    const child = exec(
       command,
       {
         cwd,
@@ -101,5 +106,16 @@ export function runCommand(command: string, cwd: string, timeout?: number): Prom
         done({ ok: false, code: -1, stdout, stderr, error: error.message })
       }
     )
+
+    // A secret belongs on stdin, not in the command line: what goes on the line
+    // is shown in the permission dialog and listed by anything that can read
+    // the machine's processes. Closing the stream is part of the contract — a
+    // tool still waiting for input would hang until the timeout.
+    if (child.stdin) {
+      child.stdin.on('error', () => {
+        // The command may never read stdin; a broken pipe is not an error here.
+      })
+      child.stdin.end(stdin ?? '')
+    }
   })
 }

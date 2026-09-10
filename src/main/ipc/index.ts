@@ -8,11 +8,16 @@ import { saveState } from '@main/persistence/store'
 import type { PodManager } from '@main/pods/PodManager'
 import { BackgroundPages } from '@main/scripting'
 import { commandName, isAllowedCommand, isValidCommand, runCommand } from '@main/shellCommand'
+import { RunningCommands } from '@main/shellCommand/running'
 import { createHitAreaTracker } from '@main/windows/overlayWindow'
 import {
   type AppState,
   type CreatePodInput,
+  type ExecHandleRequest,
+  type ExecKillResult,
+  type ExecPollResult,
   type ExecRequest,
+  type ExecStartResult,
   type FindOptions,
   type Folder,
   type FolderId,
@@ -45,6 +50,7 @@ import {
   type BrowserWindow,
   Menu,
   type MenuItemConstructorOptions,
+  app,
   dialog,
   ipcMain
 } from 'electron'
@@ -176,6 +182,7 @@ export function registerIpc(
     settleExecPrompt(id, { allowed: false })
     settleScriptingPrompt(id, false)
     pages.closeAllFor(id)
+    commands.killAllFor(id)
     state.pods = state.pods.filter((p) => p.id !== id)
     if (state.activePodId === id) state.activePodId = state.pods[0]?.id ?? null
     pods.destroy(id)
@@ -336,11 +343,19 @@ export function registerIpc(
     pending.answer(grant)
   }
 
-  pods.onExecRequest = async (id, request: ExecRequest): Promise<GitResult> => {
+  /**
+   * Everything both command entry points have to settle before anything runs:
+   * the command is usable, this Pod may run THIS one, and it has a folder to
+   * run it in. Returns the working directory, or the refusal to hand back.
+   */
+  const prepareCommand = async (
+    id: PodId,
+    request: ExecRequest
+  ): Promise<{ cwd: string } | { error: string }> => {
     const pod = state.pods.find((p) => p.id === id)
-    if (!pod) return refuse('Unknown Pod.')
+    if (!pod) return { error: 'Unknown Pod.' }
     if (!isValidCommand(request?.command)) {
-      return refuse('exec expects a non-empty command line.')
+      return { error: 'exec expects a non-empty command line.' }
     }
     const command = request.command
 
@@ -352,20 +367,63 @@ export function registerIpc(
       grant = await askExecAccess(id, command)
     }
 
-    if (!grant.allowed) return refuse('This Pod is not allowed to run commands.')
+    if (!grant.allowed) return { error: 'This Pod is not allowed to run commands.' }
     if (!isAllowedCommand(command, grant.allow)) {
-      return refuse(`This Pod is not allowed to run “${commandName(command)}”.`)
+      return { error: `This Pod is not allowed to run “${commandName(command)}”.` }
     }
 
     // Commands run in the folder granted for git: one folder per Pod, one rule.
     const root = await grantedRoot(id)
-    if (!root) return refuse('This Pod has no folder to run commands in.')
+    if (!root) return { error: 'This Pod has no folder to run commands in.' }
 
     const cwd = resolveWorkingDirectory(root, request.cwd)
-    if (!cwd) return refuse('Working directory outside the folder granted to this Pod.')
+    if (!cwd) return { error: 'Working directory outside the folder granted to this Pod.' }
 
-    return runCommand(command, cwd, request.timeout)
+    return { cwd }
   }
+
+  pods.onExecRequest = async (id, request: ExecRequest): Promise<GitResult> => {
+    const prepared = await prepareCommand(id, request)
+    if ('error' in prepared) return refuse(prepared.error)
+    return runCommand(request.command, prepared.cwd, request.timeout, request.stdin)
+  }
+
+  // Commands that outlive a single answer — an agent session, a long build.
+  // Same permission, same folder, same allow-list; only the shape differs.
+  const commands = new RunningCommands()
+
+  pods.onExecStart = async (id, request: ExecRequest): Promise<ExecStartResult> => {
+    const prepared = await prepareCommand(id, request)
+    if ('error' in prepared) return { ok: false, error: prepared.error }
+    return commands.start(id, request.command, prepared.cwd, {
+      timeout: request.timeout,
+      stdin: request.stdin
+    })
+  }
+
+  // Polling and killing re-check the permission rather than trusting the
+  // handle: revoking Command Access must stop a session already under way.
+  pods.onExecPoll = async (id, request: ExecHandleRequest): Promise<ExecPollResult> => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod || pod.settings?.exec?.allowed !== true) {
+      commands.killAllFor(id)
+      return {
+        ok: false,
+        running: false,
+        stdout: '',
+        stderr: '',
+        error: 'This Pod is not allowed to run commands.'
+      }
+    }
+    return commands.poll(id, request?.id)
+  }
+
+  pods.onExecKill = async (id, request: ExecHandleRequest): Promise<ExecKillResult> =>
+    commands.kill(id, request?.id)
+
+  // Closing DeskPods must not leave an agent session or a build running with
+  // nobody able to see it or stop it any more.
+  app.on('will-quit', () => commands.disposeAll())
 
   // --- background pages -------------------------------------------------
   // A Pod can drive another site like an API: open it once on this Pod's
@@ -816,6 +874,7 @@ export function registerIpc(
                 ? 'Revoke Command Access'
                 : 'Reset Command Permission',
               click: () => {
+                commands.killAllFor(id)
                 pod.settings = { ...pod.settings, exec: undefined }
                 pushState()
               }
@@ -869,6 +928,7 @@ export function registerIpc(
         enabled: pods.hasView(id),
         click: () => {
           pages.closeAllFor(id)
+          commands.killAllFor(id)
           pods.suspend(id)
         }
       },

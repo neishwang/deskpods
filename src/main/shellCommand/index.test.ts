@@ -80,6 +80,27 @@ describe('runCommand', () => {
     expect(result.stdout.trim()).toBe('hi')
   })
 
+  it('writes stdin and closes it, so a command waiting for input finishes', async () => {
+    const result = await runCommand(
+      "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(d.trim().toUpperCase()))\"",
+      cwd,
+      10_000,
+      'secret'
+    )
+    expect(result.ok).toBe(true)
+    expect(result.stdout).toBe('SECRET')
+  })
+
+  it('closes stdin even when nothing was given, so nothing waits on it', async () => {
+    const result = await runCommand(
+      "node -e \"process.stdin.on('end',()=>process.stdout.write('done'));process.stdin.resume()\"",
+      cwd,
+      10_000
+    )
+    expect(result.ok).toBe(true)
+    expect(result.stdout).toBe('done')
+  })
+
   it('fails with an error when the timeout runs out', async () => {
     const result = await runCommand('node -e "setTimeout(() => {}, 5000)"', cwd, 1000)
     expect(result.ok).toBe(false)

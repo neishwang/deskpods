@@ -170,6 +170,46 @@ await window.__deskpods.exec('npm ci', { cwd: 'web', timeout: 300000 })
 `timeout` is clamped to 1 s … 10 min (120 s by default). Output is capped at
 16 MB, and no console window flashes on screen.
 
+### Secrets, and commands that outlive one answer
+
+A secret goes on **standard input**, never on the command line: what is on the
+line appears in the permission dialog and in the machine's process list.
+
+```js
+// A KeePass entry, master password fed through stdin.
+const r = await window.__deskpods.exec('keepassxc-cli show -q -a Password vault.kdbx GitHub', {
+  stdin: masterPassword
+})
+```
+
+For anything that runs longer than an answer — an agent session, a build, a
+deployment — start it and follow it:
+
+```js
+const { id } = await window.__deskpods.execStart('cursor-agent -p "fix the failing test"')
+
+for (;;) {
+  const step = await window.__deskpods.execPoll(id)
+  if (step.stdout) append(step.stdout)          // only what is new since last poll
+  if (!step.running) break                      // step.code holds the exit code
+  await new Promise((r) => setTimeout(r, 1000))
+}
+
+await window.__deskpods.execKill(id)            // ...or stop it early
+```
+
+`execStart` resolves with `{ ok, id, error? }`, `execPoll` with
+`{ ok, running, stdout, stderr, code?, truncated?, error? }` — each poll carries
+only what was printed since the previous one, so appending them in order gives
+the whole output. `truncated` says output had to be dropped because nothing
+polled for too long. The default limit is 30 minutes (up to 24 h via `timeout`),
+four commands at a time per Pod, and everything a Pod started is killed when it
+is suspended, when Command Access is revoked, and when DeskPods quits — down the
+whole process tree, so nothing carries on unseen.
+
+Because the page polls rather than subscribing, a page that reloads mid-command
+finds it again with its id instead of losing an event stream.
+
 ### Permission
 
 This one is asked separately from git, and on the command itself: git is one

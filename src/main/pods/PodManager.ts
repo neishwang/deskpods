@@ -1,6 +1,10 @@
 import { join } from 'node:path'
 import {
+  type ExecHandleRequest,
+  type ExecKillResult,
+  type ExecPollResult,
   type ExecRequest,
+  type ExecStartResult,
   type FindOptions,
   type FindResult,
   type GitRequest,
@@ -152,6 +156,11 @@ export class PodManager {
   onGitRequest?: (id: PodId, request: GitRequest) => Promise<GitResult>
   /** Set by the IPC layer: the Pod's page asked to run a command line. */
   onExecRequest?: (id: PodId, request: ExecRequest) => Promise<GitResult>
+  /** Set by the IPC layer: the Pod's page asked to start, follow or stop a
+   *  command that outlives a single answer. */
+  onExecStart?: (id: PodId, request: ExecRequest) => Promise<ExecStartResult>
+  onExecPoll?: (id: PodId, request: ExecHandleRequest) => Promise<ExecPollResult>
+  onExecKill?: (id: PodId, request: ExecHandleRequest) => Promise<ExecKillResult>
   /** Set by the IPC layer: the Pod's page asked to read the granted folder. */
   onListDirRequest?: (id: PodId, request: ListDirRequest) => Promise<ListDirResult>
   onReadFileRequest?: (id: PodId, request: ReadFileRequest) => Promise<ReadFileResult>
@@ -273,6 +282,41 @@ export class PodManager {
       }
       return handler(pod.id, request ?? { command: '' })
     })
+
+    wc.ipc.handle(
+      IpcChannels.podExecStart,
+      (_e, request: ExecRequest): Promise<ExecStartResult> => {
+        const handler = this.onExecStart
+        if (!handler) return Promise.resolve({ ok: false, error: 'Command bridge unavailable.' })
+        return handler(pod.id, request ?? { command: '' })
+      }
+    )
+
+    wc.ipc.handle(
+      IpcChannels.podExecPoll,
+      (_e, request: ExecHandleRequest): Promise<ExecPollResult> => {
+        const handler = this.onExecPoll
+        if (!handler) {
+          return Promise.resolve({
+            ok: false,
+            running: false,
+            stdout: '',
+            stderr: '',
+            error: 'Command bridge unavailable.'
+          })
+        }
+        return handler(pod.id, request ?? { id: '' })
+      }
+    )
+
+    wc.ipc.handle(
+      IpcChannels.podExecKill,
+      (_e, request: ExecHandleRequest): Promise<ExecKillResult> => {
+        const handler = this.onExecKill
+        if (!handler) return Promise.resolve({ ok: false, error: 'Command bridge unavailable.' })
+        return handler(pod.id, request ?? { id: '' })
+      }
+    )
 
     wc.ipc.handle(IpcChannels.podListDir, (_e, request: ListDirRequest): Promise<ListDirResult> => {
       const handler = this.onListDirRequest
