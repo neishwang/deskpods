@@ -34,6 +34,31 @@ import {
 } from 'electron'
 
 /**
+ * What a Pod's pages may ask Chromium for.
+ *
+ * The line is drawn at data: these give a page a better time on screen without
+ * telling it anything it did not already know. Notifications are the point —
+ * the unread badge is built on them; the clipboard pair is what makes a web
+ * app's own copy/paste buttons work; fullscreen and pointer lock are pure UI;
+ * storage is where the app already keeps its own data.
+ *
+ * Everything else is refused, silently as far as the page is concerned:
+ * microphone, camera, screen capture, location, MIDI, USB, serial, HID, and
+ * idle detection (which tells a site whether you are at your desk). A Pod is a
+ * web site; a web site that wants the microphone should be asked for, not
+ * assumed. Refusing is also the safe default for whatever Chromium adds next.
+ */
+const ALLOWED_PERMISSIONS = new Set([
+  'notifications',
+  'clipboard-read',
+  'clipboard-sanitized-write',
+  'fullscreen',
+  'pointerLock',
+  'persistent-storage',
+  'background-sync'
+])
+
+/**
  * Injected into each Pod's page (main world) to CAPTURE the notifications a web
  * app raises, instead of letting it show its own (OS/native, out-of-theme) popup.
  * We intercept BOTH notification paths and forward title/body to main, which
@@ -130,6 +155,9 @@ interface PodMeta {
 export class PodManager {
   private readonly window: BrowserWindow
   private readonly views = new Map<PodId, WebContentsView>()
+  /** Popups a Pod opened with window.open (OAuth and friends), kept so they
+   *  never outlive the Pod — nor the app. */
+  private readonly popups = new Map<PodId, Set<BrowserWindow>>()
   private readonly podsById = new Map<PodId, Pod>()
   private activeId: PodId | null = null
   private bounds: Rect = { x: 0, y: 0, width: 0, height: 0 }
@@ -225,10 +253,14 @@ export class PodManager {
 
     const wc = view.webContents
 
-    // Grant the permissions a web app needs to behave like it does in Chromium
-    // (notably notifications, so we can surface unread badges).
-    wc.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(true))
-    wc.session.setPermissionCheckHandler(() => true)
+    // Grant only the permissions a web app needs to behave like it does in
+    // Chromium (see ALLOWED_PERMISSIONS). The handlers are per SESSION, so
+    // Pods sharing a partition share them — which is right: they share a login
+    // too.
+    wc.session.setPermissionRequestHandler((_wc, permission, callback) =>
+      callback(ALLOWED_PERMISSIONS.has(permission))
+    )
+    wc.session.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission))
 
     // Report page title / favicon so the sidebar can auto-fill name and icon.
     wc.on('page-title-updated', (_e, title) => this.onMeta?.(pod.id, { title }))
@@ -458,9 +490,60 @@ export class PodManager {
       return { action: 'deny' }
     })
 
+    // A popup is a real BrowserWindow: left untracked, an OAuth window nobody
+    // closed would keep the app alive after the main window is gone (a hidden
+    // window still counts for `window-all-closed`) and would outlive the Pod
+    // that opened it.
+    wc.on('did-create-window', (child) => this.trackPopup(pod.id, child))
+
     void wc.loadURL(pod.url)
     this.views.set(pod.id, view)
     return view
+  }
+
+  /**
+   * Keep a popup with the Pod that opened it, and answer the bridge inside it.
+   *
+   * Chromium copies the opener's webPreferences, so the Pod preload is loaded
+   * there and `window.__deskpods` exists — but the handlers live on the Pod's
+   * OWN web contents, and an invoke nobody handles REJECTS. Every caller in
+   * this project is written to read a result, never to catch, so a popup
+   * answers with a refusal rather than throwing.
+   */
+  private trackPopup(podId: PodId, child: BrowserWindow): void {
+    const forPod = this.popups.get(podId) ?? new Set<BrowserWindow>()
+    forPod.add(child)
+    this.popups.set(podId, forPod)
+    child.on('closed', () => forPod.delete(child))
+
+    const why = 'The DeskPods bridge belongs to the Pod itself, not to a popup it opened.'
+    const wc = child.webContents
+    const failed = { ok: false, code: -1, stdout: '', stderr: '', error: why }
+    wc.ipc.handle(IpcChannels.podGit, () => Promise.resolve(failed))
+    wc.ipc.handle(IpcChannels.podExec, () => Promise.resolve(failed))
+    wc.ipc.handle(IpcChannels.podExecStart, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podExecPoll, () =>
+      Promise.resolve({ ok: false, running: false, stdout: '', stderr: '', error: why })
+    )
+    wc.ipc.handle(IpcChannels.podExecKill, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podListDir, () =>
+      Promise.resolve({ ok: false, entries: [], error: why })
+    )
+    wc.ipc.handle(IpcChannels.podReadFile, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podWriteFile, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podOpenPage, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podRunScript, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podClosePage, () => Promise.resolve({ ok: false, error: why }))
+  }
+
+  /** Close every popup a Pod opened (it was suspended, deleted, or we quit). */
+  private closePopups(podId: PodId): void {
+    const forPod = this.popups.get(podId)
+    if (!forPod) return
+    this.popups.delete(podId)
+    for (const child of forPod) {
+      if (!child.isDestroyed()) child.destroy()
+    }
   }
 
   /**
@@ -520,6 +603,12 @@ export class PodManager {
       })
     }
 
+    // Note for later: a copy made here lands in the Windows clipboard history
+    // (Win+V). Excluding it needs the `ExcludeClipboardContentFromMonitorProcessing`
+    // / `CanIncludeInClipboardHistory` formats written ATOMICALLY with the text,
+    // which Electron 33's clipboard API cannot do (writeBuffer replaces the
+    // content). And it would only ever cover the copies DeskPods makes itself —
+    // a Ctrl+C inside a page is Chromium's own write, out of reach from here.
     if (params.linkURL) {
       group(
         { label: 'Open Link in Browser', click: () => void shell.openExternal(params.linkURL) },
@@ -700,6 +789,7 @@ export class PodManager {
 
   /** Free the renderer/GPU cost of a Pod while keeping its session on disk. */
   suspend(id: PodId): void {
+    this.closePopups(id)
     const view = this.views.get(id)
     if (!view) return
     this.views.delete(id)
@@ -731,6 +821,10 @@ export class PodManager {
   disposeAll(): void {
     for (const id of [...this.views.keys()]) {
       this.suspend(id)
+    }
+    // A Pod with no live view may still have left a popup behind.
+    for (const id of [...this.popups.keys()]) {
+      this.closePopups(id)
     }
   }
 }

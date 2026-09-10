@@ -26,7 +26,10 @@ export function createOverlayWindow(parent: BrowserWindow): BrowserWindow | null
       show: false,
       backgroundColor: '#00000000',
       webPreferences: {
-        preload: join(__dirname, '../preload/index.js'),
+        // Its own narrow bridge: the overlay draws what main pushes and says
+        // when it is idle. It has no business creating Pods or answering
+        // permission prompts, and its content comes from web apps' titles.
+        preload: join(__dirname, '../preload/overlay.js'),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true

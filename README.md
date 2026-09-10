@@ -20,6 +20,12 @@ When you *want* a shared login (one Google account across Gmail, Calendar and
 Drive), create the Pod as *linked*: it reuses the partition of an existing Pod
 on purpose. Folders never affect isolation — they are purely visual.
 
+A Pod's pages are also held to what a web app actually needs: notifications
+(the unread badge is built on them), the clipboard, fullscreen, pointer lock and
+storage. Microphone, camera, screen capture, location, USB, serial, HID and idle
+detection are refused outright — a Pod is a web site, and none of those should be
+granted just because it asked.
+
 ## Getting started
 
 Requires [Bun](https://bun.sh) and, for the git bridge, `git` on your `PATH`.
@@ -319,6 +325,11 @@ directory. The app's own state — Pods, folders, per-Pod zoom and git
 permissions — is a single `deskpods/state.json`.
 
 Unread state is never persisted; it is derived at runtime.
+
+That file is written by renaming a temporary one over it, so a crash mid-write
+cannot leave it half-written. If it is ever unreadable anyway, DeskPods keeps it
+as `state.json.corrupt-<timestamp>` and starts on the defaults rather than
+quietly pretending you never had any Pods.
 
 ## Releases
 

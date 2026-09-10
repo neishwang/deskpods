@@ -29,7 +29,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve('src/preload/index.ts'),
-          pod: resolve('src/preload/pod.ts')
+          pod: resolve('src/preload/pod.ts'),
+          overlay: resolve('src/preload/overlay.ts')
         }
       }
     }

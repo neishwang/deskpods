@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { AppState } from '@types'
 import { app } from 'electron'
@@ -39,14 +39,49 @@ function defaultState(): AppState {
   }
 }
 
+/**
+ * A parsed file is not yet a state: a truncated write can leave valid JSON with
+ * half the shape, and handing that to main crashes it on the first `.map`.
+ * Anything that is not recognisable is refused as a whole rather than patched
+ * into something half-true.
+ */
+function isAppState(value: unknown): value is AppState {
+  if (typeof value !== 'object' || value === null) return false
+  const state = value as Partial<AppState>
+  if (!Array.isArray(state.pods) || !Array.isArray(state.folders)) return false
+  return state.pods.every(
+    (pod) =>
+      typeof pod?.id === 'string' && typeof pod.url === 'string' && typeof pod.profile === 'string'
+  )
+}
+
 export function loadState(): AppState {
+  const file = stateFile()
+  let raw: string
   try {
-    const file = stateFile()
-    if (existsSync(file)) {
-      return JSON.parse(readFileSync(file, 'utf-8')) as AppState
-    }
+    if (!existsSync(file)) return defaultState()
+    raw = readFileSync(file, 'utf-8')
   } catch {
-    // Corrupted or unreadable state falls back to defaults.
+    // Unreadable (locked, permissions): start on the defaults, but do NOT touch
+    // the file — the next launch may well read it fine.
+    return defaultState()
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (isAppState(parsed)) return parsed
+  } catch {
+    // Falls through to the rescue below.
+  }
+
+  // Unusable content. Falling back to the demo Pods silently would look exactly
+  // like "DeskPods lost everything", so keep the file: whatever is in it may
+  // still be recoverable by hand, and its presence explains the empty start.
+  try {
+    renameSync(file, `${file}.corrupt-${Date.now()}`)
+    console.error(`[deskpods] Unusable state file; kept a copy next to ${file}`)
+  } catch (err) {
+    console.error('[deskpods] Unusable state file, and it could not be kept:', err)
   }
   return defaultState()
 }
@@ -78,7 +113,12 @@ export function flushState(): void {
   try {
     const file = stateFile()
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(state, null, 2), 'utf-8')
+    // Write beside the real file and rename over it: a crash or a power cut
+    // mid-write would otherwise leave a truncated state.json, and the next
+    // launch would find no Pods at all. A rename is atomic; a write is not.
+    const temporary = `${file}.tmp`
+    writeFileSync(temporary, JSON.stringify(state, null, 2), 'utf-8')
+    renameSync(temporary, file)
   } catch (err) {
     // A failed write must never crash main; state stays in memory and the next
     // mutation will retry.

@@ -7,6 +7,12 @@
  * (overlayIdle) once nothing is visible any more, so main can hide the window
  * and the compositor stops blending a transparent full-size surface.
  */
+import type { OverlayApi } from '@types'
+
+/** What the overlay's preload actually exposes. Going through this handle means
+ *  reaching for anything else fails to compile rather than at runtime. */
+const bridge: OverlayApi = window.deskpods
+
 let tooltipVisible = false
 let zoomVisible = false
 let toastCount = 0
@@ -17,14 +23,14 @@ let idleTimer: number | undefined
 function scheduleIdleCheck(): void {
   clearTimeout(idleTimer)
   idleTimer = window.setTimeout(() => {
-    if (!tooltipVisible && !zoomVisible && toastCount === 0) window.deskpods.overlayIdle()
+    if (!tooltipVisible && !zoomVisible && toastCount === 0) bridge.overlayIdle()
   }, 250)
 }
 
 const tooltip = document.getElementById('tooltip')
 
 if (tooltip) {
-  window.deskpods.onTooltip((payload) => {
+  bridge.onTooltip((payload) => {
     if (!payload) {
       tooltip.classList.remove('visible')
       tooltipVisible = false
@@ -47,7 +53,7 @@ if (zoom) {
   const ZOOM_MS = 1400
   let hideTimer: number | undefined
 
-  window.deskpods.onZoomIndicator((percent) => {
+  bridge.onZoomIndicator((percent) => {
     zoom.textContent = `${percent}%`
     zoom.classList.add('visible')
     zoomVisible = true
@@ -79,10 +85,10 @@ if (toasts) {
         height: Math.round(r.height)
       }
     })
-    window.deskpods.reportHitAreas(areas)
+    bridge.reportHitAreas(areas)
   }
 
-  window.deskpods.onToast((toast) => {
+  bridge.onToast((toast) => {
     const el = document.createElement('div')
     el.className = 'toast'
     el.title = 'Click to dismiss'

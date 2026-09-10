@@ -24,13 +24,22 @@ type SidebarDialog =
   | { type: 'scripting-permission'; id: PodId; origin: string; target: string }
 
 interface PodStore extends AppState {
+  /** The dialog on screen: the head of the queue below. */
   dialog: SidebarDialog | null
+  /**
+   * Dialogs waiting their turn. A permission prompt is a QUESTION a Pod's page
+   * is blocked on: showing one dialog at a time used to mean the second one
+   * replaced the first, and the page waiting on the replaced one never got an
+   * answer at all. They queue instead, and each is answered in turn.
+   */
+  dialogQueue: SidebarDialog[]
   /** The find bar is showing under the active Pod. */
   findOpen: boolean
   /** Bumped on every Ctrl+F so the bar re-focuses and selects its input, even
    *  when it is already open. */
   findToken: number
 
+  /** Queue a dialog, or close the one on screen with null. */
   setDialog: (dialog: SidebarDialog | null) => void
   toggleFind: () => void
   closeFind: () => void
@@ -58,12 +67,23 @@ export const usePodStore = create<PodStore>((set, get) => ({
   pods: [],
   folders: [],
   activePodId: null,
+  dialogQueue: [],
   loaded: false,
   dialog: null,
   findOpen: false,
   findToken: 0,
 
-  setDialog: (dialog) => set({ dialog }),
+  setDialog: (next) => {
+    const queue = get().dialogQueue
+    if (next === null) {
+      // Done with the one on screen; the next question, if any, comes up.
+      const rest = queue.slice(1)
+      set({ dialogQueue: rest, dialog: rest[0] ?? null })
+      return
+    }
+    const queued = [...queue, next]
+    set({ dialogQueue: queued, dialog: queued[0] })
+  },
 
   /** Ctrl+F opens the bar, and closes it when it is already open. */
   toggleFind: () => {

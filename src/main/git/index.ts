@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { GitResult } from '@types'
 
 /**
@@ -34,6 +35,49 @@ export function resolveWorkingDirectory(root: string, requested?: string): strin
   const inside = relative(root, target)
   if (inside.startsWith('..') || isAbsolute(inside)) return null
   return target
+}
+
+/**
+ * Real path of `p`, resolved as far as it exists. A path that is not there yet
+ * (a file about to be written) still has to be checked against the links on the
+ * way to it, so the deepest existing ancestor is resolved and the rest appended.
+ */
+function realPathOf(p: string): string {
+  let current = p
+  const trail: string[] = []
+  for (;;) {
+    try {
+      const real = realpathSync.native(current)
+      return trail.length > 0 ? join(real, ...trail.reverse()) : real
+    } catch {
+      const parent = dirname(current)
+      // Nothing along this path exists (or none of it can be read): the lexical
+      // answer is the best we have, and it was already checked.
+      if (parent === current) return p
+      trail.push(basename(current))
+      current = parent
+    }
+  }
+}
+
+/**
+ * The path a request may actually touch, or null when it would leave `root`.
+ *
+ * THIS is what every caller must use; `resolveWorkingDirectory` alone compares
+ * strings, and a junction or symlink sitting inside the granted folder points
+ * wherever it likes without the string ever saying so. Both ends are resolved
+ * to their real location before being compared, and the real path is what comes
+ * back, so the link is not walked a second time.
+ */
+export function resolveInside(root: string, requested?: string): string | null {
+  const lexical = resolveWorkingDirectory(root, requested)
+  if (!lexical) return null
+
+  const realRoot = realPathOf(root)
+  const realTarget = realPathOf(lexical)
+  const inside = relative(realRoot, realTarget)
+  if (inside.startsWith('..') || isAbsolute(inside)) return null
+  return realTarget
 }
 
 /** True when the page sent something that can be handed to git as arguments. */

@@ -59,22 +59,41 @@ export function DialogsHost(): React.JSX.Element | null {
   }, [dialog])
 
   if (!dialog) return null
+
+  // Two dialogs of the same kind can follow each other out of the queue (two
+  // Pods asking for git, say). Without a key React would REUSE the component,
+  // and a permission dialog that has already answered once refuses to answer
+  // again — the second page would wait forever. The key forces a fresh one.
+  const key = `${dialog.type}:${'id' in dialog ? dialog.id : (dialog.folderId ?? 'root')}`
+
   switch (dialog.type) {
     case 'add-pod':
-      return <AddPodDialog folderId={dialog.folderId} />
+      return <AddPodDialog key={key} folderId={dialog.folderId} />
     case 'rename-pod':
-      return <RenamePod id={dialog.id} />
+      return <RenamePod key={key} id={dialog.id} />
     case 'edit-pod-url':
-      return <EditPodUrl id={dialog.id} />
+      return <EditPodUrl key={key} id={dialog.id} />
     case 'folder-settings':
-      return <FolderSettingsDialog id={dialog.id} />
+      return <FolderSettingsDialog key={key} id={dialog.id} />
     case 'git-permission':
-      return <GitPermissionDialog id={dialog.id} origin={dialog.origin} />
+      return <GitPermissionDialog key={key} id={dialog.id} origin={dialog.origin} />
     case 'exec-permission':
-      return <ExecPermissionDialog id={dialog.id} origin={dialog.origin} command={dialog.command} />
+      return (
+        <ExecPermissionDialog
+          key={key}
+          id={dialog.id}
+          origin={dialog.origin}
+          command={dialog.command}
+        />
+      )
     case 'scripting-permission':
       return (
-        <ScriptingPermissionDialog id={dialog.id} origin={dialog.origin} target={dialog.target} />
+        <ScriptingPermissionDialog
+          key={key}
+          id={dialog.id}
+          origin={dialog.origin}
+          target={dialog.target}
+        />
       )
   }
 }

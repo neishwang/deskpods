@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { resolveWorkingDirectory } from '@main/git'
+import { resolveInside } from '@main/git'
 import type { FileEncoding, ListDirResult, ReadFileResult, WriteFileResult } from '@types'
 
 /**
@@ -34,7 +34,7 @@ function isEncoding(value: unknown): value is FileEncoding {
  * caller's decision, not ours.
  */
 export async function listDirectory(root: string, requested?: string): Promise<ListDirResult> {
-  const target = resolveWorkingDirectory(root, requested)
+  const target = resolveInside(root, requested)
   if (!target)
     return { ok: false, entries: [], error: 'Path outside the folder granted to this Pod.' }
 
@@ -66,7 +66,7 @@ export async function readFileAt(
     return { ok: false, error: "readFile expects encoding 'utf8' or 'base64'." }
   }
 
-  const target = resolveWorkingDirectory(root, requested)
+  const target = resolveInside(root, requested)
   if (!target) return { ok: false, error: 'Path outside the folder granted to this Pod.' }
 
   try {
@@ -104,7 +104,7 @@ export async function writeFileAt(
     return { ok: false, error: "writeFile expects encoding 'utf8' or 'base64'." }
   }
 
-  const target = resolveWorkingDirectory(root, requested)
+  const target = resolveInside(root, requested)
   if (!target) return { ok: false, error: 'Path outside the folder granted to this Pod.' }
 
   try {

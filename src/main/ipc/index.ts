@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { listDirectory, readFileAt, writeFileAt } from '@main/files'
-import { isValidArgs, resolveWorkingDirectory, runGit } from '@main/git'
+import { isValidArgs, resolveInside, runGit } from '@main/git'
 import { cleanTitle, setTaskbarBadge, titleUnreadCount } from '@main/notifications'
 import { saveState } from '@main/persistence/store'
 import type { PodManager } from '@main/pods/PodManager'
@@ -48,6 +48,7 @@ import {
 } from '@types'
 import {
   type BrowserWindow,
+  type IpcMainInvokeEvent,
   Menu,
   type MenuItemConstructorOptions,
   app,
@@ -110,6 +111,28 @@ export function registerIpc(
   }
   const send = (channel: string, payload: unknown) => {
     if (!window.isDestroyed()) window.webContents.send(channel, payload)
+  }
+
+  /**
+   * These channels answer the DeskPods chrome and its overlay, nobody else.
+   *
+   * A Pod's page cannot reach them today — it is sandboxed and context-isolated,
+   * and its preload exposes `__deskpods` and nothing more — so this is the belt
+   * that keeps it true if a preload ever grows. Everything a Pod IS allowed to
+   * ask for goes through `wc.ipc` on its own web contents, which carries the
+   * Pod it came from.
+   */
+  const fromApp = (event: IpcMainInvokeEvent): boolean =>
+    event.sender === window.webContents || event.sender === overlay?.webContents
+
+  const handle = (
+    channel: string,
+    listener: (event: IpcMainInvokeEvent, ...args: never[]) => unknown
+  ): void => {
+    ipcMain.handle(channel, (event, ...args) => {
+      if (!fromApp(event)) return { ok: false, error: 'Refused: not the DeskPods chrome.' }
+      return (listener as (e: IpcMainInvokeEvent, ...a: unknown[]) => unknown)(event, ...args)
+    })
   }
 
   // --- unread notifications (runtime only; never persisted) ---
@@ -281,7 +304,7 @@ export function registerIpc(
     const root = await grantedRoot(id)
     if (!root) return refuse('This Pod is not allowed to run git commands.')
 
-    const cwd = resolveWorkingDirectory(root, request.cwd)
+    const cwd = resolveInside(root, request.cwd)
     if (!cwd) return refuse('Working directory outside the folder granted to this Pod.')
 
     return runGit(request.args, cwd)
@@ -376,7 +399,7 @@ export function registerIpc(
     const root = await grantedRoot(id)
     if (!root) return { error: 'This Pod has no folder to run commands in.' }
 
-    const cwd = resolveWorkingDirectory(root, request.cwd)
+    const cwd = resolveInside(root, request.cwd)
     if (!cwd) return { error: 'Working directory outside the folder granted to this Pod.' }
 
     return { cwd }
@@ -424,6 +447,15 @@ export function registerIpc(
   // Closing DeskPods must not leave an agent session or a build running with
   // nobody able to see it or stop it any more.
   app.on('will-quit', () => commands.disposeAll())
+
+  // ...and it must actually close. A background page is a hidden BrowserWindow,
+  // and `window-all-closed` waits for every window there is — so one a Pod
+  // forgot to close would keep the whole app alive, invisible, until its idle
+  // timer expired minutes later.
+  window.on('closed', () => {
+    pages.disposeAll()
+    commands.disposeAll()
+  })
 
   // --- background pages -------------------------------------------------
   // A Pod can drive another site like an API: open it once on this Pod's
@@ -515,6 +547,20 @@ export function registerIpc(
     }
   }
 
+  /**
+   * Refuse everything still on screen. The chrome reloading — a crash, or HMR
+   * in dev — takes its dialogs with it, and a page blocked on a promise nobody
+   * can answer any more would wait for ever. A refusal here is NOT remembered:
+   * only the permission handlers write to `pod.settings`, so the next call asks
+   * again.
+   */
+  const refuseOpenPrompts = () => {
+    for (const id of [...gitPrompts.keys()]) settleGitPrompt(id, { allowed: false })
+    for (const id of [...execPrompts.keys()]) settleExecPrompt(id, { allowed: false })
+    for (const id of [...scriptingPrompts.keys()]) settleScriptingPrompt(id, false)
+  }
+  window.webContents.on('did-start-loading', refuseOpenPrompts)
+
   // --- Keep Awake -------------------------------------------------------
   // Pods marked awake are loaded without being shown, so the app inside is
   // connected — and can notify — before it has ever been clicked. Deferred:
@@ -553,9 +599,12 @@ export function registerIpc(
   }
   // Toasts are clickable; everything else in the overlay stays click-through.
   const setHitAreas = overlay ? createHitAreaTracker(overlay) : () => {}
-  ipcMain.on(IpcChannels.overlayHitAreas, (_e, areas: Rect[]) => setHitAreas(areas))
+  ipcMain.on(IpcChannels.overlayHitAreas, (event, areas: Rect[]) => {
+    if (event.sender === overlay?.webContents) setHitAreas(areas)
+  })
 
-  ipcMain.on(IpcChannels.overlayIdle, () => {
+  ipcMain.on(IpcChannels.overlayIdle, (event) => {
+    if (event.sender !== overlay?.webContents) return
     setHitAreas([])
     if (overlay && !overlay.isDestroyed()) overlay.hide()
   })
@@ -619,7 +668,7 @@ export function registerIpc(
 
   // --- renderer-driven handlers ---
 
-  ipcMain.handle(IpcChannels.getState, (): AppState => stateForRenderer())
+  handle(IpcChannels.getState, (): AppState => stateForRenderer())
 
   // Root Pods and folders share ONE visual order sequence; a new root entry
   // must therefore go after the max across BOTH, not after its own kind's
@@ -631,7 +680,7 @@ export function registerIpc(
       ...state.folders.map((f) => f.order)
     ) + 1
 
-  ipcMain.handle(IpcChannels.createPod, (_e, input: CreatePodInput): Pod => {
+  handle(IpcChannels.createPod, (_e, input: CreatePodInput): Pod => {
     const id = randomUUID()
     const providedName = (input.name ?? '').trim()
     const folderId = input.folderId ?? null
@@ -659,7 +708,10 @@ export function registerIpc(
     return pod
   })
 
-  ipcMain.handle(IpcChannels.activatePod, (_e, id: PodId): void => {
+  handle(IpcChannels.activatePod, (_e, id: PodId): void => {
+    // A Pod that is not there cannot become the active one: `pods.activate`
+    // would no-op and we would persist an id pointing at nothing.
+    if (!state.pods.some((p) => p.id === id)) return
     // Leave no search highlighted behind on the Pod we are stepping away from.
     pods.stopFind()
     state.activePodId = id
@@ -672,15 +724,15 @@ export function registerIpc(
     saveState(state)
   })
 
-  ipcMain.handle(IpcChannels.updateBounds, (_e, bounds: Rect): void => {
+  handle(IpcChannels.updateBounds, (_e, bounds: Rect): void => {
     pods.updateBounds(bounds)
   })
 
-  ipcMain.handle(IpcChannels.setOverlay, (_e, active: boolean): void => {
+  handle(IpcChannels.setOverlay, (_e, active: boolean): void => {
     pods.setOverlay(active)
   })
 
-  ipcMain.handle(
+  handle(
     IpcChannels.gitPermission,
     (_e, id: PodId, allowed: boolean, root: string | null): void => {
       const grant: PodGitAccess = allowed && root ? { allowed: true, root } : { allowed: false }
@@ -693,7 +745,7 @@ export function registerIpc(
     }
   )
 
-  ipcMain.handle(
+  handle(
     IpcChannels.execPermission,
     (_e, id: PodId, allowed: boolean, allow: string[] | null): void => {
       const pod = state.pods.find((p) => p.id === id)
@@ -718,7 +770,7 @@ export function registerIpc(
     }
   )
 
-  ipcMain.handle(IpcChannels.scriptingPermission, (_e, id: PodId, allowed: boolean): void => {
+  handle(IpcChannels.scriptingPermission, (_e, id: PodId, allowed: boolean): void => {
     const pod = state.pods.find((p) => p.id === id)
     if (pod) {
       pod.settings = { ...pod.settings, scripting: allowed }
@@ -728,7 +780,7 @@ export function registerIpc(
     settleScriptingPrompt(id, allowed)
   })
 
-  ipcMain.handle(IpcChannels.pickFolder, async (): Promise<string | null> => {
+  handle(IpcChannels.pickFolder, async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog(window, {
       properties: ['openDirectory'],
       title: 'Choose the folder this Pod may run git and read files in'
@@ -736,15 +788,15 @@ export function registerIpc(
     return result.filePaths[0] ?? null
   })
 
-  ipcMain.handle(IpcChannels.findInPage, (_e, text: string, options?: FindOptions): void => {
+  handle(IpcChannels.findInPage, (_e, text: string, options?: FindOptions): void => {
     pods.find(text, options)
   })
 
-  ipcMain.handle(IpcChannels.stopFindInPage, (): void => {
+  handle(IpcChannels.stopFindInPage, (): void => {
     pods.stopFind()
   })
 
-  ipcMain.handle(IpcChannels.updatePod, (_e, id: PodId, patch: PodPatch): void => {
+  handle(IpcChannels.updatePod, (_e, id: PodId, patch: PodPatch): void => {
     const pod = state.pods.find((p) => p.id === id)
     if (!pod) return
     if (patch.name !== undefined) {
@@ -759,7 +811,7 @@ export function registerIpc(
     persist()
   })
 
-  ipcMain.handle(IpcChannels.reorderPods, (_e, placements: PodPlacement[]): void => {
+  handle(IpcChannels.reorderPods, (_e, placements: PodPlacement[]): void => {
     for (const { id, folderId, order } of placements) {
       const pod = state.pods.find((p) => p.id === id)
       if (pod) {
@@ -773,7 +825,7 @@ export function registerIpc(
     else persist()
   })
 
-  ipcMain.handle(IpcChannels.createFolder, (_e, name: string): Folder => {
+  handle(IpcChannels.createFolder, (_e, name: string): Folder => {
     const folder: Folder = {
       id: randomUUID(),
       name: name.trim() || 'New Folder',
@@ -786,12 +838,12 @@ export function registerIpc(
     return folder
   })
 
-  ipcMain.handle(IpcChannels.updateFolder, (_e, id: FolderId, patch: FolderPatch): void => {
+  handle(IpcChannels.updateFolder, (_e, id: FolderId, patch: FolderPatch): void => {
     applyFolderPatch(id, patch)
     persist()
   })
 
-  ipcMain.handle(IpcChannels.reorderFolders, (_e, placements: FolderPlacement[]): void => {
+  handle(IpcChannels.reorderFolders, (_e, placements: FolderPlacement[]): void => {
     for (const { id, order } of placements) {
       const folder = state.folders.find((f) => f.id === id)
       if (folder) folder.order = order
@@ -801,7 +853,7 @@ export function registerIpc(
 
   // --- native context menus (main-driven; push full state on mutation) ---
 
-  ipcMain.handle(IpcChannels.showPodMenu, (_e, id: PodId): void => {
+  handle(IpcChannels.showPodMenu, (_e, id: PodId): void => {
     const pod = state.pods.find((p) => p.id === id)
     if (!pod) return
     const zoom = pod.settings?.zoom
@@ -949,12 +1001,10 @@ export function registerIpc(
     if (payload) showOverlay()
     overlay.webContents.send(IpcChannels.tooltip, payload)
   }
-  ipcMain.handle(IpcChannels.tooltipShow, (_e, payload: TooltipPayload): void =>
-    sendTooltip(payload)
-  )
-  ipcMain.handle(IpcChannels.tooltipHide, (): void => sendTooltip(null))
+  handle(IpcChannels.tooltipShow, (_e, payload: TooltipPayload): void => sendTooltip(payload))
+  handle(IpcChannels.tooltipHide, (): void => sendTooltip(null))
 
-  ipcMain.handle(IpcChannels.pickFile, async (): Promise<string | null> => {
+  handle(IpcChannels.pickFile, async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog(window, {
       properties: ['openFile'],
       filters: [
@@ -966,7 +1016,7 @@ export function registerIpc(
     return filePath ? pathToFileURL(filePath).href : null
   })
 
-  ipcMain.handle(IpcChannels.showFolderMenu, (_e, id: FolderId): void => {
+  handle(IpcChannels.showFolderMenu, (_e, id: FolderId): void => {
     const folder = state.folders.find((f) => f.id === id)
     if (!folder) return
 

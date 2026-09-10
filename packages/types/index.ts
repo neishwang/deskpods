@@ -429,6 +429,17 @@ export interface DeskPodsApi {
   onStateChanged(listener: (state: AppState) => void): () => void
 }
 
+/**
+ * The slice of the API the overlay window is given. It draws what main pushes
+ * and reports back; it can change nothing — which matters, because what it
+ * draws comes from web apps (a notification's title), and the window that draws
+ * it has no business answering permission prompts.
+ */
+export type OverlayApi = Pick<
+  DeskPodsApi,
+  'onTooltip' | 'onToast' | 'onZoomIndicator' | 'reportHitAreas' | 'overlayIdle'
+>
+
 /** IPC channel names, kept in one place to avoid string drift. */
 export const IpcChannels = {
   getState: 'app:getState',

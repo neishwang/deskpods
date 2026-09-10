@@ -1,6 +1,8 @@
-import { resolve } from 'node:path'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isValidArgs, resolveWorkingDirectory } from './index'
+import { isValidArgs, resolveInside, resolveWorkingDirectory } from './index'
 
 const ROOT = resolve('C:/work/repos')
 
@@ -43,5 +45,39 @@ describe('isValidArgs', () => {
     expect(isValidArgs(['status', 42])).toBe(false)
     expect(isValidArgs(null)).toBe(false)
     expect(isValidArgs({ 0: 'status' })).toBe(false)
+  })
+})
+
+describe('resolveInside', () => {
+  // A real folder tree: this is about what the filesystem does, not about
+  // string arithmetic, so nothing here is mocked.
+  const root = mkdtempSync(join(tmpdir(), 'deskpods-root-'))
+  const outside = mkdtempSync(join(tmpdir(), 'deskpods-outside-'))
+  mkdirSync(join(root, 'sub'), { recursive: true })
+  writeFileSync(join(outside, 'secret.txt'), 'nope', 'utf8')
+
+  it('accepts what lives inside the granted folder', () => {
+    expect(resolveInside(root, 'sub')).toBeTruthy()
+    expect(resolveInside(root)).toBeTruthy()
+  })
+
+  it('still refuses the lexical escapes', () => {
+    expect(resolveInside(root, '..')).toBeNull()
+    expect(resolveInside(root, 'sub/../..')).toBeNull()
+    expect(resolveInside(root, outside)).toBeNull()
+  })
+
+  it('refuses a link that points out of the granted folder', () => {
+    // The whole point: `relative()` sees "escape/secret.txt", which looks
+    // perfectly contained, while the filesystem hands over another folder.
+    symlinkSync(outside, join(root, 'escape'), 'junction')
+    expect(resolveWorkingDirectory(root, 'escape')).not.toBeNull() // lexically fine…
+    expect(resolveInside(root, 'escape')).toBeNull() // …and refused anyway.
+    expect(resolveInside(root, 'escape/secret.txt')).toBeNull()
+  })
+
+  it('accepts a path that does not exist yet, inside the folder', () => {
+    // writeFile creates files: the check has to work before they are there.
+    expect(resolveInside(root, 'sub/new/file.json')).toBeTruthy()
   })
 })
