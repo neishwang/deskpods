@@ -55,6 +55,8 @@ const api: DeskPodsApi = {
     ipcRenderer.invoke(IpcChannels.execPermission, id, allowed, allow),
   resolveScriptingPermission: (id: PodId, allowed: boolean) =>
     ipcRenderer.invoke(IpcChannels.scriptingPermission, id, allowed),
+  resolveDownloadPermission: (id: PodId, allowed: boolean) =>
+    ipcRenderer.invoke(IpcChannels.downloadPermission, id, allowed),
   showTooltip: (payload: TooltipPayload) => ipcRenderer.invoke(IpcChannels.tooltipShow, payload),
   hideTooltip: () => ipcRenderer.invoke(IpcChannels.tooltipHide),
   onTooltip: (listener: (payload: TooltipPayload | null) => void) => {

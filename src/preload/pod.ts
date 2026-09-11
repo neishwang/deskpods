@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
 
 /**
  * Preload injected into every Pod's web content. It exposes a tiny bridge to
@@ -20,7 +20,7 @@ import { contextBridge, ipcRenderer } from 'electron'
  * make Rollup split out a chunk and break BOTH preloads at runtime. The channel
  * strings must stay in sync with `IpcChannels.podNotification`, `.podGit`,
  * `.podExec`, `.podExecStart`/`.podExecPoll`/`.podExecKill`, `.podListDir`,
- * `.podReadFile` and `.podWriteFile`.
+ * `.podReadFile`, `.podWriteFile` and the `.podDownload*` trio.
  */
 contextBridge.exposeInMainWorld('__deskpods', {
   // Payload: { title, body?, icon? } captured from the wrapped Notification, so
@@ -77,5 +77,26 @@ contextBridge.exposeInMainWorld('__deskpods', {
   openPage: (url: unknown, options?: { waitFor?: string; timeout?: number }) =>
     ipcRenderer.invoke('pods:openPage', { url, options }),
   runScript: (id: unknown, code: unknown) => ipcRenderer.invoke('pods:runScript', { id, code }),
-  closePage: (id: unknown) => ipcRenderer.invoke('pods:closePage', { id })
+  closePage: (id: unknown) => ipcRenderer.invoke('pods:closePage', { id }),
+
+  // Download a file with THIS Pod's session — the one the page is already
+  // logged in with — instead of handing the link to the default browser. The
+  // bytes go from Chromium to the disk and never through the page.
+  //
+  // `start` resolves as soon as the download has begun, with DeskPods' own id:
+  // waiting for a 300 MB file would leave the page nothing to draw for minutes.
+  // `onProgress` is one channel for the whole Pod — every event carries the id
+  // of the download it is about — and returns its own unsubscribe function,
+  // because a page that lives for hours must be able to let go of a listener.
+  download: {
+    start: (url: unknown, options?: { fileName?: string }) =>
+      ipcRenderer.invoke('pods:download:start', { url, fileName: options?.fileName }),
+    cancel: (id: unknown) => ipcRenderer.invoke('pods:download:cancel', { id }),
+    reveal: (path: unknown) => ipcRenderer.invoke('pods:download:reveal', { path }),
+    onProgress: (listener: (progress: unknown) => void) => {
+      const handler = (_e: IpcRendererEvent, progress: unknown) => listener(progress)
+      ipcRenderer.on('pods:download:progress', handler)
+      return () => ipcRenderer.removeListener('pods:download:progress', handler)
+    }
+  }
 })

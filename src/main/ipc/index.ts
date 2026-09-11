@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { PodDownloads } from '@main/downloads'
 import { listDirectory, readFileAt, writeFileAt } from '@main/files'
 import { isValidArgs, resolveInside, runGit } from '@main/git'
 import { cleanTitle, setTaskbarBadge, titleUnreadCount } from '@main/notifications'
@@ -13,6 +14,9 @@ import { createHitAreaTracker } from '@main/windows/overlayWindow'
 import {
   type AppState,
   type CreatePodInput,
+  type DownloadResult,
+  type DownloadStartRequest,
+  type DownloadStartResult,
   type ExecHandleRequest,
   type ExecKillResult,
   type ExecPollResult,
@@ -204,8 +208,10 @@ export function registerIpc(
     settleGitPrompt(id, { allowed: false })
     settleExecPrompt(id, { allowed: false })
     settleScriptingPrompt(id, false)
+    settleDownloadPrompt(id, false)
     pages.closeAllFor(id)
     commands.killAllFor(id)
+    downloads.forget(id)
     state.pods = state.pods.filter((p) => p.id !== id)
     if (state.activePodId === id) state.activePodId = state.pods[0]?.id ?? null
     pods.destroy(id)
@@ -446,7 +452,10 @@ export function registerIpc(
 
   // Closing DeskPods must not leave an agent session or a build running with
   // nobody able to see it or stop it any more.
-  app.on('will-quit', () => commands.disposeAll())
+  app.on('will-quit', () => {
+    commands.disposeAll()
+    downloads.disposeAll()
+  })
 
   // ...and it must actually close. A background page is a hidden BrowserWindow,
   // and `window-all-closed` waits for every window there is — so one a Pod
@@ -455,7 +464,90 @@ export function registerIpc(
   window.on('closed', () => {
     pages.disposeAll()
     commands.disposeAll()
+    downloads.disposeAll()
   })
+
+  // --- downloads --------------------------------------------------------
+  // A Pod's page can download a file with the Pod's OWN session, which is the
+  // whole point: the session it is already logged in with. Its own permission,
+  // asked once per Pod like scripting — the user still answers a Save dialog for
+  // every single file, so what is being granted is "download with my session",
+  // not "write where you like".
+  const downloads = new PodDownloads()
+  const downloadPrompts = new Map<
+    PodId,
+    { promise: Promise<boolean>; answer: (ok: boolean) => void }
+  >()
+
+  const askDownload = (id: PodId, url: string): Promise<boolean> => {
+    const pending = downloadPrompts.get(id)
+    if (pending) return pending.promise
+
+    let answer!: (allowed: boolean) => void
+    const promise = new Promise<boolean>((resolve) => {
+      answer = resolve
+    })
+    downloadPrompts.set(id, { promise, answer })
+    send(IpcChannels.uiCommand, {
+      type: 'download-permission',
+      id,
+      origin: pods.urlOf(id),
+      url
+    })
+    return promise
+  }
+
+  const settleDownloadPrompt = (id: PodId, allowed: boolean) => {
+    const pending = downloadPrompts.get(id)
+    if (!pending) return
+    downloadPrompts.delete(id)
+    pending.answer(allowed)
+  }
+
+  /** True when this Pod may download, asking if it never answered. */
+  const mayDownload = async (id: PodId, url: string): Promise<boolean> => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod) return false
+    if (pod.settings?.download !== undefined) return pod.settings.download
+    return askDownload(id, url)
+  }
+
+  // A download is not the answer to an invoke: it arrives at the session. Wired
+  // when a Pod's view is created, once per session (Pods sharing a partition
+  // share one).
+  pods.onSession = (_id, session) => downloads.wire(session)
+
+  // Progress goes back to the page that asked, on one channel for the whole Pod:
+  // each event says which download it is about, and the page sorts them out.
+  downloads.onProgress = (id, progress) => pods.send(id, IpcChannels.podDownloadProgress, progress)
+
+  pods.onDownloadStart = async (
+    id,
+    request: DownloadStartRequest,
+    sender
+  ): Promise<DownloadStartResult> => {
+    if (!(await mayDownload(id, request?.url ?? ''))) {
+      return { ok: false, id: '', error: 'This Pod is not allowed to download files.' }
+    }
+    // The permission may have been taken back while the prompt was up, and the
+    // page may have navigated away from the request it made.
+    if (sender.isDestroyed()) return { ok: false, id: '', error: 'The page is gone.' }
+    return downloads.start(id, sender, request ?? { url: '' })
+  }
+
+  // Stopping and revealing re-check the permission rather than trusting the
+  // handle: revoking Download Access must stop a download already under way —
+  // and `forget` on revocation already cancels it.
+  pods.onDownloadCancel = async (id, downloadId): Promise<DownloadResult> =>
+    downloads.cancel(id, downloadId)
+
+  pods.onDownloadReveal = async (id, path): Promise<DownloadResult> => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod || pod.settings?.download !== true) {
+      return { ok: false, error: 'This Pod is not allowed to download files.' }
+    }
+    return downloads.reveal(id, path)
+  }
 
   // --- background pages -------------------------------------------------
   // A Pod can drive another site like an API: open it once on this Pod's
@@ -558,6 +650,7 @@ export function registerIpc(
     for (const id of [...gitPrompts.keys()]) settleGitPrompt(id, { allowed: false })
     for (const id of [...execPrompts.keys()]) settleExecPrompt(id, { allowed: false })
     for (const id of [...scriptingPrompts.keys()]) settleScriptingPrompt(id, false)
+    for (const id of [...downloadPrompts.keys()]) settleDownloadPrompt(id, false)
   }
   window.webContents.on('did-start-loading', refuseOpenPrompts)
 
@@ -780,6 +873,16 @@ export function registerIpc(
     settleScriptingPrompt(id, allowed)
   })
 
+  handle(IpcChannels.downloadPermission, (_e, id: PodId, allowed: boolean): void => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (pod) {
+      pod.settings = { ...pod.settings, download: allowed }
+      persist()
+    }
+    if (!allowed) downloads.forget(id)
+    settleDownloadPrompt(id, allowed)
+  })
+
   handle(IpcChannels.pickFolder, async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog(window, {
       properties: ['openDirectory'],
@@ -901,6 +1004,21 @@ export function registerIpc(
               click: () => {
                 pages.closeAllFor(id)
                 pod.settings = { ...pod.settings, scripting: undefined }
+                pushState()
+              }
+            },
+            { type: 'separator' } as MenuItemConstructorOptions
+          ]
+        : []),
+      ...(pod.settings?.download !== undefined
+        ? [
+            {
+              label: pod.settings.download ? 'Revoke Download Access' : 'Reset Download Permission',
+              click: () => {
+                // A download nobody can follow any more is stopped, not left to
+                // fill the disk in the background.
+                downloads.forget(id)
+                pod.settings = { ...pod.settings, download: undefined }
                 pushState()
               }
             },

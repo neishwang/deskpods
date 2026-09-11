@@ -22,6 +22,7 @@ type SidebarDialog =
   | { type: 'git-permission'; id: PodId; origin: string }
   | { type: 'exec-permission'; id: PodId; origin: string; command: string }
   | { type: 'scripting-permission'; id: PodId; origin: string; target: string }
+  | { type: 'download-permission'; id: PodId; origin: string; url: string }
 
 interface PodStore extends AppState {
   /** The dialog on screen: the head of the queue below. */

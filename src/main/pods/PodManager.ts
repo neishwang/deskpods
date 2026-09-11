@@ -1,5 +1,8 @@
 import { join } from 'node:path'
 import {
+  type DownloadResult,
+  type DownloadStartRequest,
+  type DownloadStartResult,
   type ExecHandleRequest,
   type ExecKillResult,
   type ExecPollResult,
@@ -28,6 +31,8 @@ import {
   type BrowserWindow,
   Menu,
   type MenuItemConstructorOptions,
+  type Session,
+  type WebContents,
   WebContentsView,
   clipboard,
   shell
@@ -193,6 +198,22 @@ export class PodManager {
   onListDirRequest?: (id: PodId, request: ListDirRequest) => Promise<ListDirResult>
   onReadFileRequest?: (id: PodId, request: ReadFileRequest) => Promise<ReadFileResult>
   onWriteFileRequest?: (id: PodId, request: WriteFileRequest) => Promise<WriteFileResult>
+  /** Set by the IPC layer: the Pod's page asked to download a file with this
+   *  Pod's session, to stop one, or to show a finished one on disk. `sender` is
+   *  the page that asked — the download itself is started from it, so it carries
+   *  the session (and the login) the page is already using. */
+  onDownloadStart?: (
+    id: PodId,
+    request: DownloadStartRequest,
+    sender: WebContents
+  ) => Promise<DownloadStartResult>
+  onDownloadCancel?: (id: PodId, downloadId: string) => Promise<DownloadResult>
+  onDownloadReveal?: (id: PodId, path: string) => Promise<DownloadResult>
+  /** Set by the IPC layer: a Pod's session has just been created, for whatever
+   *  has to be listened to on the SESSION rather than on an invoke — downloads
+   *  arrive there. Called once per view; Pods sharing a partition hand over the
+   *  same session, which the listener is expected to wire only once. */
+  onSession?: (id: PodId, session: Session) => void
   /** Set by the IPC layer: the Pod's page wants to drive a background page. */
   onOpenPage?: (id: PodId, url: string, options?: OpenPageOptions) => Promise<OpenPageResult>
   onRunScript?: (id: PodId, handle: string, code: string) => Promise<ScriptResult>
@@ -212,6 +233,14 @@ export class PodManager {
   urlOf(id: PodId): string {
     const wc = this.views.get(id)?.webContents
     return wc && !wc.isDestroyed() ? wc.getURL() : ''
+  }
+
+  /** Push an event to a Pod's page (its preload subscribes to the channel).
+   *  No-op when the Pod has no live view: nothing is queued for later, an event
+   *  nobody could be listening to is not worth keeping. */
+  send(id: PodId, channel: string, payload: unknown): void {
+    const wc = this.views.get(id)?.webContents
+    if (wc && !wc.isDestroyed()) wc.send(channel, payload)
   }
 
   /** Whether a live view exists for this Pod (i.e. it consumes resources). */
@@ -261,6 +290,11 @@ export class PodManager {
       callback(ALLOWED_PERMISSIONS.has(permission))
     )
     wc.session.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission))
+
+    // Downloads are not the answer to an invoke: they arrive at the session.
+    // Wired here, beside the other session-level guard rails, and once — the
+    // session is shared by every Pod on this partition.
+    this.onSession?.(pod.id, wc.session)
 
     // Report page title / favicon so the sidebar can auto-fill name and icon.
     wc.on('page-title-updated', (_e, title) => this.onMeta?.(pod.id, { title }))
@@ -372,6 +406,39 @@ export class PodManager {
         const handler = this.onWriteFileRequest
         if (!handler) return Promise.resolve({ ok: false, error: 'File bridge unavailable.' })
         return handler(pod.id, request ?? { path: '', content: '' })
+      }
+    )
+
+    // Downloads, with this Pod's session: same per-Pod scoping, and the sender
+    // is handed over because the download is started from the page itself.
+    wc.ipc.handle(
+      IpcChannels.podDownloadStart,
+      (event, request: DownloadStartRequest): Promise<DownloadStartResult> => {
+        const handler = this.onDownloadStart
+        if (!handler) {
+          return Promise.resolve({ ok: false, id: '', error: 'Download bridge unavailable.' })
+        }
+        return handler(pod.id, request ?? { url: '' }, event.sender)
+      }
+    )
+
+    wc.ipc.handle(
+      IpcChannels.podDownloadCancel,
+      (_e, payload: { id?: unknown }): Promise<DownloadResult> => {
+        if (!this.onDownloadCancel || typeof payload?.id !== 'string') {
+          return Promise.resolve({ ok: false, error: 'cancel expects a download id.' })
+        }
+        return this.onDownloadCancel(pod.id, payload.id)
+      }
+    )
+
+    wc.ipc.handle(
+      IpcChannels.podDownloadReveal,
+      (_e, payload: { path?: unknown }): Promise<DownloadResult> => {
+        if (!this.onDownloadReveal || typeof payload?.path !== 'string') {
+          return Promise.resolve({ ok: false, error: 'reveal expects a path.' })
+        }
+        return this.onDownloadReveal(pod.id, payload.path)
       }
     )
 
@@ -531,6 +598,11 @@ export class PodManager {
     )
     wc.ipc.handle(IpcChannels.podReadFile, () => Promise.resolve({ ok: false, error: why }))
     wc.ipc.handle(IpcChannels.podWriteFile, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podDownloadStart, () =>
+      Promise.resolve({ ok: false, id: '', error: why })
+    )
+    wc.ipc.handle(IpcChannels.podDownloadCancel, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podDownloadReveal, () => Promise.resolve({ ok: false, error: why }))
     wc.ipc.handle(IpcChannels.podOpenPage, () => Promise.resolve({ ok: false, error: why }))
     wc.ipc.handle(IpcChannels.podRunScript, () => Promise.resolve({ ok: false, error: why }))
     wc.ipc.handle(IpcChannels.podClosePage, () => Promise.resolve({ ok: false, error: why }))

@@ -2,6 +2,7 @@ import { ipc } from '@renderer/lib/ipc'
 import type { PodId } from '@types'
 import { useEffect } from 'react'
 import { AddPodDialog } from './AddPodDialog'
+import { DownloadPermissionDialog } from './DownloadPermissionDialog'
 import { ExecPermissionDialog } from './ExecPermissionDialog'
 import { FolderSettingsDialog } from './FolderSettingsDialog'
 import { GitPermissionDialog } from './GitPermissionDialog'
@@ -93,6 +94,15 @@ export function DialogsHost(): React.JSX.Element | null {
           id={dialog.id}
           origin={dialog.origin}
           target={dialog.target}
+        />
+      )
+    case 'download-permission':
+      return (
+        <DownloadPermissionDialog
+          key={key}
+          id={dialog.id}
+          origin={dialog.origin}
+          url={dialog.url}
         />
       )
   }

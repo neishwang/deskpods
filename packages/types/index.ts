@@ -46,6 +46,10 @@ export interface PodSettings {
   git?: PodGitAccess
   /** Set once the user has answered the exec permission prompt for this Pod. */
   exec?: PodExecAccess
+  /** Set once the user has answered the download permission prompt for this
+   *  Pod: true lets its pages download files with the Pod's own session, false
+   *  refuses. The user still picks where every file goes. */
+  download?: boolean
   /** Keep this Pod running as if it were on screen: no timer throttling, no
    *  "hidden" from the Page Visibility API, and its page is loaded shortly
    *  after startup instead of on first click. For the chat app that would
@@ -208,6 +212,57 @@ export interface WriteFileResult {
   error?: string
 }
 
+/** A download a Pod's page asks DeskPods to run with the Pod's own session. */
+export interface DownloadStartRequest {
+  /** http(s) only. The bytes never travel through the page: they go from
+   *  Chromium to the disk. */
+  url: string
+  /** Suggested name, offered in the Save dialog. Folders in it are ignored —
+   *  where the file lands is the user's answer to that dialog, not the page's. */
+  fileName?: string
+}
+
+/** Answer to `start`, given at once: the download has begun, not finished. */
+export interface DownloadStartResult {
+  ok: boolean
+  /** DeskPods' own id, carried by every progress event for this download.
+   *  Empty when it never started. */
+  id: string
+  error?: string
+}
+
+/** Answer to `cancel` / `reveal`. */
+export interface DownloadResult {
+  ok: boolean
+  error?: string
+}
+
+export interface DownloadHandleRequest {
+  /** The id returned by start. */
+  id: string
+}
+
+export interface DownloadRevealRequest {
+  /** Absolute path of a file this Pod downloaded. Anything else is refused:
+   *  opening Explorer wherever a page likes is not part of the deal. */
+  path: string
+}
+
+/** Pushed to the Pod's page while one of its downloads runs. One channel for
+ *  the whole Pod; each event says which download it is about. */
+export interface DownloadProgress {
+  id: string
+  fileName: string
+  /** Where the file is being written. Empty until the user has answered the
+   *  Save dialog. */
+  path: string
+  received: number
+  /** 0 when the server does not say how big the file is — a progress bar has to
+   *  go indeterminate rather than pretend. */
+  total: number
+  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'
+}
+
 export interface Pod {
   id: PodId
   name: string
@@ -343,6 +398,8 @@ export type UiCommand =
   | { type: 'exec-permission'; id: PodId; origin: string; command: string }
   /** A Pod's page asked to drive a background page and has no answer yet. */
   | { type: 'scripting-permission'; id: PodId; origin: string; target: string }
+  /** A Pod's page asked to download a file and has no answer on file yet. */
+  | { type: 'download-permission'; id: PodId; origin: string; url: string }
   | { type: 'rename-pod'; id: PodId }
   | { type: 'edit-pod-url'; id: PodId }
   | { type: 'folder-settings'; id: FolderId }
@@ -395,6 +452,8 @@ export interface DeskPodsApi {
   resolveExecPermission(id: PodId, allowed: boolean, allow: string[] | null): Promise<void>
   /** Answer the scripting permission prompt for a Pod. */
   resolveScriptingPermission(id: PodId, allowed: boolean): Promise<void>
+  /** Answer the download permission prompt for a Pod. */
+  resolveDownloadPermission(id: PodId, allowed: boolean): Promise<void>
 
   // Tooltips are drawn in a transparent overlay window so they can sit above
   // the Pod's native web view.
@@ -484,6 +543,15 @@ export const IpcChannels = {
   podClosePage: 'pods:closePage',
   /** renderer -> main: the user answered the scripting permission prompt. */
   scriptingPermission: 'pods:scriptingPermission',
+  /** Pod page -> main: download a file with this Pod's session, stop one, or
+   *  show a finished one in the file manager. */
+  podDownloadStart: 'pods:download:start',
+  podDownloadCancel: 'pods:download:cancel',
+  podDownloadReveal: 'pods:download:reveal',
+  /** main -> Pod page push: how one of its downloads is doing. */
+  podDownloadProgress: 'pods:download:progress',
+  /** renderer -> main: the user answered the download permission prompt. */
+  downloadPermission: 'pods:downloadPermission',
   /** Pod page -> main: the web app raised a Notification (via the Pod preload). */
   podNotification: 'pods:notification',
   tooltipShow: 'ui:tooltip:show',

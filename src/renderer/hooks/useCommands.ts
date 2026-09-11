@@ -45,6 +45,14 @@ export function useCommands(): (command: UiCommand) => void {
           target: command.target
         })
         break
+      case 'download-permission':
+        store.setDialog({
+          type: 'download-permission',
+          id: command.id,
+          origin: command.origin,
+          url: command.url
+        })
+        break
     }
   }, [])
 }

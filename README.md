@@ -316,6 +316,67 @@ Practical limits: `http`/`https` only, at most 4 background pages open per Pod,
 each closed automatically after 5 minutes without a script, when its Pod is
 suspended or deleted, and when the permission is revoked.
 
+## Downloading from a Pod
+
+A download started by a Pod stays in DeskPods, on that Pod's session. The point
+is the session: a link handed to your default browser is a link followed by
+someone else's cookies, so a file the Pod is logged in for often turns into a
+login page over there — and the page never learns where the file went, or whether
+it arrived.
+
+```js
+// Returns as soon as the download has begun — not when it finishes.
+const { ok, id, error } = await window.__deskpods.download.start(url, {
+  fileName: 'refresh-2026-09.zip'
+})
+
+// One channel for the whole Pod: every event says which download it is about.
+const stop = window.__deskpods.download.onProgress((p) => {
+  if (p.id !== id) return
+  // p.total is 0 when the server does not say: show an indeterminate bar.
+  console.log(p.state, p.received, p.total, p.path)
+  if (p.state === 'completed') window.__deskpods.download.reveal(p.path)
+})
+
+await window.__deskpods.download.cancel(id)  // stop it early
+stop()                                       // and let the listener go
+```
+
+`start(url, options?)` resolves with `{ ok, id, error? }` **at once**: a 300 MB
+package takes minutes, and the page has a bar to draw meanwhile. The `id` is
+DeskPods' own, and it is what ties every progress event back to the row that
+asked. `onProgress` returns its own unsubscribe function, because a page that
+lives for hours has to be able to let go.
+
+Each event carries `{ id, fileName, path, received, total, state }`, with `state`
+one of `progressing`, `completed`, `cancelled` or `interrupted`. `path` is empty
+until you have answered the Save dialog, and `total` is `0` when the server never
+said how big the file is.
+
+The bytes never touch the page: Chromium writes them straight to disk. Fetching
+into a blob would put the whole package in the renderer's memory only to end up
+on a download link a Pod cannot click anyway.
+
+### Permission
+
+One prompt per Pod, like the others, remembered with it and revocable from its
+right-click menu (*Revoke Download Access*). It is the mildest of the bridges:
+nothing runs and nothing is read, **you** still choose where every single file
+goes, and the page is only told how far along it is. Revoking stops whatever was
+still downloading — a transfer nobody can see or cancel any more has no business
+continuing.
+
+Practical limits: `http`/`https` only (a `blob:` belongs to the page's own
+context, and `file://` would make this a way to copy your disk around), at most
+4 downloads at a time per Pod, and the file name a page suggests is reduced to a
+bare name before it is offered in the dialog — the folder is never the page's
+choice. `reveal(path)` only opens files that Pod actually downloaded; a Pod is a
+web site, and a web site does not get to open your file manager wherever it
+likes.
+
+A download DeskPods did not start — a link you clicked in a page, *Save Image
+As…* — behaves as before and is reported to no page.
+
 ## Where your data lives
 
 In a packaged build DeskPods is portable: settings *and* every Pod's Chromium
@@ -363,12 +424,11 @@ Three bundles plus a shared package:
 - `packages/types` — domain models, the typed IPC surface and channel names.
   No Electron import; every new channel starts here.
 - `src/main` — owns all state and all web content: one `WebContentsView` per
-  Pod, native menus, notifications, persistence, the git / command / file
-  bridges and the background pages a Pod can drive.
+  Pod, native menus, notifications, persistence, the git / command / file /
+  download bridges and the background pages a Pod can drive.
 - `src/preload` — two bridges: `window.deskpods` for the chrome, and a minimal
-  `window.__deskpods` (notifications, git, commands, files, background
-  pages) injected into Pod
-  pages.
+  `window.__deskpods` (notifications, git, commands, files, downloads,
+  background pages) injected into Pod pages.
 - `src/renderer` — the React chrome (sidebar, dialogs, find bar), plus a second
   tiny renderer in `src/overlay` for what must paint above the Pods.
 
