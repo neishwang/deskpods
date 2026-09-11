@@ -7,7 +7,7 @@ import type {
   DownloadStartResult,
   PodId
 } from '@types'
-import { type DownloadItem, type Session, type WebContents, shell } from 'electron'
+import { type DownloadItem, type Session, shell, type WebContents } from 'electron'
 
 /**
  * Downloads run by a Pod's page, with the Pod's own session.

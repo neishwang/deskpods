@@ -1,4 +1,4 @@
-import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, type IpcRendererEvent, ipcRenderer } from 'electron'
 
 /**
  * Preload for the transparent overlay window — the layer that draws tooltips,

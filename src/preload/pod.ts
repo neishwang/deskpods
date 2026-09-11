@@ -1,4 +1,4 @@
-import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, type IpcRendererEvent, ipcRenderer } from 'electron'
 
 /**
  * Preload injected into every Pod's web content. It exposes a tiny bridge to

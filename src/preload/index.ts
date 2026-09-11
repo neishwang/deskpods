@@ -17,7 +17,7 @@ import {
   type TooltipPayload,
   type UiCommand
 } from '@types'
-import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, type IpcRendererEvent, ipcRenderer } from 'electron'
 
 /**
  * The only bridge between renderer and main. Exposes a typed, minimal API;

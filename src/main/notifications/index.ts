@@ -10,7 +10,7 @@
  *   - a plain red DOT when unread comes from a caught notification (Google Chat,
  *     Calendar, …) that carries no count in its title.
  */
-import { type BrowserWindow, type NativeImage, app, nativeImage } from 'electron'
+import { app, type BrowserWindow, type NativeImage, nativeImage } from 'electron'
 
 /**
  * Heuristic unread detection from a page title. Most web apps prefix the tab

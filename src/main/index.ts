@@ -4,7 +4,7 @@ import { flushState, loadState } from '@main/persistence/store'
 import { PodManager } from '@main/pods/PodManager'
 import { createMainWindow } from '@main/windows/mainWindow'
 import { createOverlayWindow } from '@main/windows/overlayWindow'
-import { BrowserWindow, Menu, app } from 'electron'
+import { app, BrowserWindow, Menu } from 'electron'
 
 // Portable mode: keep ALL app data — the state file AND each Pod's Chromium profile
 // (cookies, cache, storage) — in a `data/` folder next to the executable, so

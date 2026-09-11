@@ -102,12 +102,11 @@ const hideTip = (): void => {
   void ipc.hideTooltip()
 }
 
-function PodIcon({ pod }: { pod: Pod }): React.JSX.Element {
-  return pod.icon ? (
-    <img src={pod.icon} alt="" className="h-6 w-6 rounded" />
-  ) : (
-    <>{initial(pod.name)}</>
-  )
+// Returns a ReactNode rather than an element: with no favicon the icon IS a
+// bare letter, drawn by the parent's own centring — wrapping it in anything
+// would change how it sits.
+function PodIcon({ pod }: { pod: Pod }): React.ReactNode {
+  return pod.icon ? <img src={pod.icon} alt="" className="h-6 w-6 rounded" /> : initial(pod.name)
 }
 
 /** Red dot: the Pod (or a Pod inside the folder) has unread notifications. */
@@ -140,7 +139,11 @@ function PodButton({
   pod,
   container,
   disabled = false
-}: { pod: Pod; container: Container; disabled?: boolean }): React.JSX.Element {
+}: {
+  pod: Pod
+  container: Container
+  disabled?: boolean
+}): React.JSX.Element {
   const activePodId = usePodStore((s) => s.activePodId)
   const setActive = usePodStore((s) => s.setActive)
   const drop = useContext(DropContext)

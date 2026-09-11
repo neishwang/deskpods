@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { BrowserWindow, app, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 
 /**
  * Creates the single application window that hosts the React chrome.

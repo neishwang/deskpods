@@ -16,11 +16,10 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
-      "@main/*": ["src/main/*"],
-      "@types": ["packages/types"],
-      "@types/*": ["packages/types/*"]
+      "@main/*": ["./src/main/*"],
+      "@types": ["./packages/types"],
+      "@types/*": ["./packages/types/*"]
     }
   },
   "include": [

@@ -29,13 +29,13 @@ import {
 } from '@types'
 import {
   type BrowserWindow,
+  clipboard,
   Menu,
   type MenuItemConstructorOptions,
   type Session,
+  shell,
   type WebContents,
-  WebContentsView,
-  clipboard,
-  shell
+  WebContentsView
 } from 'electron'
 
 /**

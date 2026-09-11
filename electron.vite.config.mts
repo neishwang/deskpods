@@ -15,6 +15,10 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
+        // Said out loud rather than left to the default: main stays CommonJS
+        // because the preloads have to (see below), and `main` in package.json
+        // points at `out/main/index.js`. An ESM build renames it to `.mjs`.
+        output: { format: 'cjs' },
         input: { index: resolve('src/main/index.ts') }
       }
     }
@@ -27,6 +31,11 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
+        // NOT negotiable: every preload here is loaded into a SANDBOXED web
+        // contents, and a sandboxed preload is CommonJS in one file — it cannot
+        // be an ES module, and it cannot `require` a shared chunk. An ESM build
+        // would load none of them, and the bridge would simply not be there.
+        output: { format: 'cjs' },
         input: {
           index: resolve('src/preload/index.ts'),
           pod: resolve('src/preload/pod.ts'),

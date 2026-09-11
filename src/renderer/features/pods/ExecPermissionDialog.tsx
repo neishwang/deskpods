@@ -22,7 +22,7 @@ function programOf(command: string): string {
   const line = command.trim()
   const quoted = line.match(/^"([^"]*)"/)
   const token = quoted ? quoted[1] : line.split(/\s+/)[0]
-  const name = (token.split(/[\/]/).pop() ?? '').replace(/\.(exe|cmd|bat|com|ps1)$/i, '')
+  const name = (token.split(/[/]/).pop() ?? '').replace(/\.(exe|cmd|bat|com|ps1)$/i, '')
   return name.toLowerCase()
 }
 
@@ -38,7 +38,11 @@ export function ExecPermissionDialog({
   id,
   origin,
   command
-}: { id: PodId; origin: string; command: string }): React.JSX.Element | null {
+}: {
+  id: PodId
+  origin: string
+  command: string
+}): React.JSX.Element | null {
   const pod = usePodStore((s) => s.pods.find((p) => p.id === id))
   const setDialog = usePodStore((s) => s.setDialog)
   // The page is waiting on a promise: answer exactly once, and closing counts

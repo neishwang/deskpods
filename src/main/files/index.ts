@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { resolveInside } from '@main/git'
 import type { FileEncoding, ListDirResult, ReadFileResult, WriteFileResult } from '@types'

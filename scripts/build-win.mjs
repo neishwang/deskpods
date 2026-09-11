@@ -22,7 +22,7 @@ process.env.PATH = join(root, 'node_modules', '.bin') + delimiter + process.env.
 
 const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local')
 const CACHE = join(localAppData, 'electron-builder', 'Cache', 'winCodeSign')
-// Version pinned by electron-builder 25.x; bump if a future version changes it.
+// Version pinned by electron-builder 26.x; bump if a future version changes it.
 const FINAL = join(CACHE, 'winCodeSign-2.6.0')
 const SEVENZ = join(root, 'node_modules', '7zip-bin', 'win', 'x64', '7za.exe')
 

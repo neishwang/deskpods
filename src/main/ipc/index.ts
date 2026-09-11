@@ -51,13 +51,13 @@ import {
   type WriteFileResult
 } from '@types'
 import {
-  type BrowserWindow,
-  type IpcMainInvokeEvent,
-  Menu,
-  type MenuItemConstructorOptions,
   app,
+  type BrowserWindow,
   dialog,
-  ipcMain
+  type IpcMainInvokeEvent,
+  ipcMain,
+  Menu,
+  type MenuItemConstructorOptions
 } from 'electron'
 
 /** Preset folder colours offered in the native context menu. */
@@ -434,7 +434,7 @@ export function registerIpc(
   // handle: revoking Command Access must stop a session already under way.
   pods.onExecPoll = async (id, request: ExecHandleRequest): Promise<ExecPollResult> => {
     const pod = state.pods.find((p) => p.id === id)
-    if (!pod || pod.settings?.exec?.allowed !== true) {
+    if (pod?.settings?.exec?.allowed !== true) {
       commands.killAllFor(id)
       return {
         ok: false,
@@ -543,7 +543,7 @@ export function registerIpc(
 
   pods.onDownloadReveal = async (id, path): Promise<DownloadResult> => {
     const pod = state.pods.find((p) => p.id === id)
-    if (!pod || pod.settings?.download !== true) {
+    if (pod?.settings?.download !== true) {
       return { ok: false, error: 'This Pod is not allowed to download files.' }
     }
     return downloads.reveal(id, path)
@@ -605,7 +605,7 @@ export function registerIpc(
     const pod = state.pods.find((p) => p.id === id)
     // The handle only exists because permission was granted; re-check anyway,
     // so revoking it stops scripts on pages that are already open.
-    if (!pod || pod.settings?.scripting !== true) {
+    if (pod?.settings?.scripting !== true) {
       return { ok: false, error: 'This Pod is not allowed to run scripts.' }
     }
     return pages.run(id, handle, code)

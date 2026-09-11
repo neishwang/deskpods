@@ -43,7 +43,11 @@ export function DownloadPermissionDialog({
   id,
   origin,
   url
-}: { id: PodId; origin: string; url: string }): React.JSX.Element | null {
+}: {
+  id: PodId
+  origin: string
+  url: string
+}): React.JSX.Element | null {
   const pod = usePodStore((s) => s.pods.find((p) => p.id === id))
   const setDialog = usePodStore((s) => s.setDialog)
   // The page is waiting on a promise: answer exactly once, and closing counts

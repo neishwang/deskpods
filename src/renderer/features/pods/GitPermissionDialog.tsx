@@ -25,7 +25,10 @@ import { usePodStore } from './usePodStore'
 export function GitPermissionDialog({
   id,
   origin
-}: { id: PodId; origin: string }): React.JSX.Element | null {
+}: {
+  id: PodId
+  origin: string
+}): React.JSX.Element | null {
   const pod = usePodStore((s) => s.pods.find((p) => p.id === id))
   const setDialog = usePodStore((s) => s.setDialog)
   const [root, setRoot] = useState<string | null>(null)
