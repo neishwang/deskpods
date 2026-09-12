@@ -6,6 +6,15 @@ import { app, type Session } from 'electron'
 /**
  * Ad and tracker blocking, per Pod session.
  *
+ * IT CAN BREAK A SITE, and that is why it is asked for rather than assumed.
+ * Measured on YouTube: the video area stays black and the page reports a
+ * script declared twice with a stack overflow behind it. Not the request
+ * blocking - every endpoint the player needs was checked and none is on a
+ * list, including `youtubei/v1/player` and the `googlevideo` stream itself -
+ * but the cosmetic side, which injects into the page. So a Pod that plays
+ * media is a Pod where this may cost the thing the Pod is for, and it was
+ * removed as a default for the music Pod after doing exactly that.
+ *
  * Off by default and opt-in per Pod (`PodSettings.adblock`): most Pods - chat,
  * mail, an intranet - have no ads to block, and every filter engine costs
  * memory and a hop on each request. A Pod that does not ask pays nothing.

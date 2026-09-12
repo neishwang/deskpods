@@ -618,14 +618,8 @@ export interface DeskPodsApi {
 
   // The music Pod and the mini player at the foot of the sidebar.
   /** Give the music-Pod role to this Pod, or pass null to clear it. The Pod
-   *  itself is untouched - only which slot it appears in.
-   *
-   *  `enableAdblock` is the one exception, and it is passed explicitly rather
-   *  than folded into a patch: `PodPatch` deliberately cannot write `settings`,
-   *  so the renderer can never hand a Pod its own git or exec grant. This says
-   *  "tick ad blocking", nothing else, and is only used when the Pod was just
-   *  created for the role. */
-  setMusicPod(id: PodId | null, options?: { enableAdblock?: boolean }): Promise<void>
+   *  itself is untouched - only which slot it appears in. */
+  setMusicPod(id: PodId | null): Promise<void>
   /**
    * Point the music Pod at a service, in ONE operation owned by main.
    *

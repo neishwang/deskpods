@@ -96,8 +96,7 @@ export function MusicPodDialog(): React.JSX.Element {
           <DialogDescription>
             One Pod, driven by the player at the foot of the sidebar. Pick a service and it switches
             in place, keeping its session - so a service you used before still knows you. Open the
-            Pod to sign in and choose what to play; after that the player is enough. Ad blocking is
-            turned on for it.
+            Pod to sign in and choose what to play; after that the player is enough.
           </DialogDescription>
           {/* Said here rather than per service: what the player can offer is
               decided by what each page chooses to report, which is not

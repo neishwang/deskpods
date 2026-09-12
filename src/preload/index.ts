@@ -106,8 +106,7 @@ const api: DeskPodsApi = {
     ipcRenderer.on(IpcChannels.uiCommand, handler)
     return () => ipcRenderer.removeListener(IpcChannels.uiCommand, handler)
   },
-  setMusicPod: (id: PodId | null, options?: { enableAdblock?: boolean }) =>
-    ipcRenderer.invoke(IpcChannels.setMusicPod, id, options),
+  setMusicPod: (id: PodId | null) => ipcRenderer.invoke(IpcChannels.setMusicPod, id),
   setMusicService: (url: string, name?: string) =>
     ipcRenderer.invoke(IpcChannels.setMusicService, url, name),
   sendMediaCommand: (command: MediaCommand, value?: number) =>

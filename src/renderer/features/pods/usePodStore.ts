@@ -189,9 +189,7 @@ export const usePodStore = create<PodStore>((set, get) => ({
 
     const pod = await ipc.createPod({ url, name: name || undefined })
     set({ pods: [...get().pods, pod], musicPodId: pod.id, media: null })
-    // Ad blocking is ticked by main, not patched from here: `PodPatch` cannot
-    // write settings on purpose. Only a Pod created FOR the role gets it.
-    await ipc.setMusicPod(pod.id, { enableAdblock: true })
+    await ipc.setMusicPod(pod.id)
     await get().setActive(pod.id)
   },
 
