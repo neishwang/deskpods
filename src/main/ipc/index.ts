@@ -923,8 +923,18 @@ export function registerIpc(
     if (!isLoading && id === state.musicPodId) pushMusicNav()
   }
 
-  pods.onNavigated = (id) => {
-    if (id === state.musicPodId) pushMusicNav()
+  pods.onNavigated = (id, url) => {
+    if (id !== state.musicPodId) return
+    pushMusicNav()
+    // Remember where the music Pod is, so a restart reopens it there rather
+    // than at the service's front page (see Pod.lastUrl). Only this Pod, and
+    // only http(s): an error page or an about: URL is not somewhere to return
+    // to. Writing goes through the debounced save, which is what keeps a
+    // service that routes by pushState from hitting the disk per click.
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod || !/^https?:/i.test(url) || pod.lastUrl === url) return
+    pod.lastUrl = url
+    persist()
   }
 
   // The overlay window is shown only while it has content to draw; a hidden
@@ -1095,6 +1105,8 @@ export function registerIpc(
     }
 
     pod.url = url
+    // The page that was open belonged to the service being left.
+    pod.lastUrl = undefined
     // The name follows the service only while the Pod is still auto-named: a
     // Pod the user renamed keeps the name they gave it.
     if (name && autoNamed.has(id)) pod.name = name

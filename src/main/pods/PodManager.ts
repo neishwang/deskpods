@@ -249,7 +249,7 @@ export class PodManager {
 
   /** Set by the IPC layer: a Pod's page navigated, in-page navigation included.
    *  Its history changed, which is what the music Pod's back/forward read. */
-  onNavigated?: (id: PodId) => void
+  onNavigated?: (id: PodId, url: string) => void
   /** Set by the IPC layer: the Pod's page wants to drive a background page. */
   onOpenPage?: (id: PodId, url: string, options?: OpenPageOptions) => Promise<OpenPageResult>
   onRunScript?: (id: PodId, handle: string, code: string) => Promise<ScriptResult>
@@ -386,8 +386,8 @@ export class PodManager {
     // music service routes by pushState and never finishes a "load", so a
     // back/forward button refreshed only on load would sit there greyed out
     // however far you had browsed.
-    wc.on('did-navigate', () => this.onNavigated?.(pod.id))
-    wc.on('did-navigate-in-page', () => this.onNavigated?.(pod.id))
+    wc.on('did-navigate', (_e, url) => this.onNavigated?.(pod.id, url))
+    wc.on('did-navigate-in-page', (_e, url) => this.onNavigated?.(pod.id, url))
 
     // Hook the Notification API on every load, and forward each notification
     // (bridged by the Pod preload) as an unread signal for this Pod.
@@ -665,7 +665,10 @@ export class PodManager {
     // that opened it.
     wc.on('did-create-window', (child) => this.trackPopup(pod.id, child))
 
-    void wc.loadURL(pod.url)
+    // Where the Pod was left, when it is the kind of Pod that remembers (see
+    // Pod.lastUrl). Falling back to its own address covers every other Pod and
+    // a first launch.
+    void wc.loadURL(pod.lastUrl || pod.url)
     this.views.set(pod.id, view)
     return view
   }

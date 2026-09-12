@@ -275,6 +275,18 @@ export interface Pod {
   url: string
   /** Detected favicon URL, or an emoji/letter fallback. */
   icon?: string
+  /**
+   * Where this Pod was last left, so it can be reopened there.
+   *
+   * Written for the MUSIC Pod only, and on purpose. An ordinary Pod going back
+   * to its own address on launch is the useful behaviour - that address is what
+   * the Pod is for. The music Pod is the one where it is not: you leave it deep
+   * in an album or a playlist, and coming back to the service's front page
+   * means finding your way there again every time.
+   *
+   * Cleared when the service changes, since the page belonged to the old one.
+   */
+  lastUrl?: string
   /** Partition key -> Chromium partition `persist:<profile>`. */
   profile: string
   /** Visual grouping only; null means root level. */
