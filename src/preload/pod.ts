@@ -82,6 +82,13 @@ contextBridge.exposeInMainWorld('__deskpods', {
   writeFile: (path: unknown, content: unknown, options?: { encoding?: 'utf8' | 'base64' }) =>
     ipcRenderer.invoke('pods:writeFile', { path, content, encoding: options?.encoding }),
 
+  // Hand a file inside the granted folder to the program Windows associates
+  // with it - the double-click the page cannot perform itself. Needs the
+  // command permission, granted WITHOUT an allow-list: which program opens the
+  // file is the machine's business, so a list of names cannot vouch for it.
+  // Resolves with { ok, path, error? }.
+  openPath: (path: unknown) => ipcRenderer.invoke('pods:openPath', { path }),
+
   // Drive a site in a hidden page on this Pod's session: open it once, run as
   // many scripts as needed against that same loaded document, then close it.
   // openPage resolves with { ok, id, url, error? }; runScript with

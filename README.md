@@ -260,6 +260,29 @@ The prompt shows the exact line the page wants to run and offers two grants:
 Denying is remembered too, and *Revoke Command Access* / *Reset Command
 Permission* in the Pod's right-click menu makes the next call ask again.
 
+### Opening a file with its associated program
+
+A page cannot double-click a file. `openPath` does it for you: it hands a file
+inside the granted folder to whatever program Windows associates with it.
+
+```js
+const r = await window.__deskpods.openPath('imports/job.txucmd')
+// { ok, path, error? } - `path` is the absolute file actually opened
+```
+
+The path is relative to the granted folder and confined to it exactly like
+`readFile`: absolute paths, `..` and links pointing elsewhere are refused. A
+missing file is an `ok: false` answer rather than a Windows dialog appearing
+over the Pod with nothing for the page to read.
+
+It rides on Command Access, and only on a grant **without an allow-list**. A Pod
+allowed to run any command line can already spell this as `cmd /c start`, so
+nothing new is handed out - and unlike a command line, the path here cannot
+leave the granted folder, which makes this the narrower door. With a list in
+force the call is refused: a list narrows by program name, and which program
+opens a file is decided by the machine's file association, so honouring the list
+would quietly turn *only `dotnet`* into *anything with a file extension*.
+
 ## Driving another site from a Pod
 
 A Pod can use another site as an API: open it once in a hidden page, wait until
@@ -425,7 +448,7 @@ Three bundles plus a shared package:
   No Electron import; every new channel starts here.
 - `src/main` - owns all state and all web content: one `WebContentsView` per
   Pod, native menus, notifications, persistence, the git / command / file /
-  download bridges and the background pages a Pod can drive.
+  open / download bridges and the background pages a Pod can drive.
 - `src/preload` - two bridges: `window.deskpods` for the chrome, and a minimal
   `window.__deskpods` (notifications, git, commands, files, downloads,
   background pages) injected into Pod pages.

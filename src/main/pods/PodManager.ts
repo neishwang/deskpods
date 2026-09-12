@@ -19,6 +19,8 @@ import {
   type MediaReport,
   type OpenPageOptions,
   type OpenPageResult,
+  type OpenPathRequest,
+  type OpenPathResult,
   type Pod,
   type PodId,
   type PodNotifyPayload,
@@ -257,6 +259,9 @@ export class PodManager {
   onExecStart?: (id: PodId, request: ExecRequest) => Promise<ExecStartResult>
   onExecPoll?: (id: PodId, request: ExecHandleRequest) => Promise<ExecPollResult>
   onExecKill?: (id: PodId, request: ExecHandleRequest) => Promise<ExecKillResult>
+  /** Set by the IPC layer: the Pod's page asked to open a file with the
+   *  program Windows associates with it. */
+  onOpenPathRequest?: (id: PodId, request: OpenPathRequest) => Promise<OpenPathResult>
   /** Set by the IPC layer: the Pod's page asked to read the granted folder. */
   onListDirRequest?: (id: PodId, request: ListDirRequest) => Promise<ListDirResult>
   onReadFileRequest?: (id: PodId, request: ReadFileRequest) => Promise<ReadFileResult>
@@ -517,6 +522,15 @@ export class PodManager {
       }
     )
 
+    wc.ipc.handle(
+      IpcChannels.podOpenPath,
+      (_e, request: OpenPathRequest): Promise<OpenPathResult> => {
+        const handler = this.onOpenPathRequest
+        if (!handler) return Promise.resolve({ ok: false, error: 'Command bridge unavailable.' })
+        return handler(pod.id, request ?? { path: '' })
+      }
+    )
+
     wc.ipc.handle(IpcChannels.podListDir, (_e, request: ListDirRequest): Promise<ListDirResult> => {
       const handler = this.onListDirRequest
       if (!handler)
@@ -753,6 +767,7 @@ export class PodManager {
       Promise.resolve({ ok: false, running: false, stdout: '', stderr: '', error: why })
     )
     wc.ipc.handle(IpcChannels.podExecKill, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podOpenPath, () => Promise.resolve({ ok: false, error: why }))
     wc.ipc.handle(IpcChannels.podListDir, () =>
       Promise.resolve({ ok: false, entries: [], error: why })
     )

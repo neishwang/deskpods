@@ -10,6 +10,7 @@ import { saveState } from '@main/persistence/store'
 import type { PodManager } from '@main/pods/PodManager'
 import { BackgroundPages } from '@main/scripting'
 import { commandName, isAllowedCommand, isValidCommand, runCommand } from '@main/shellCommand'
+import { openPathIn } from '@main/shellCommand/openPath'
 import { RunningCommands } from '@main/shellCommand/running'
 import { createHitAreaTracker } from '@main/windows/overlayWindow'
 import {
@@ -40,6 +41,8 @@ import {
   MUSIC_SITES,
   type OpenPageOptions,
   type OpenPageResult,
+  type OpenPathRequest,
+  type OpenPathResult,
   type OverlayToast,
   type Pod,
   type PodExecAccess,
@@ -474,6 +477,39 @@ export function registerIpc(
 
   pods.onExecKill = async (id, request: ExecHandleRequest): Promise<ExecKillResult> =>
     commands.kill(id, request?.id)
+
+  // Opening a file with its associated program. On the exec grant rather than a
+  // permission of its own: a Pod allowed to run any command line can already
+  // spell this `cmd /c start`, so nothing new is being handed out - and the
+  // path here is confined to the granted folder, which a command line is not.
+  //
+  // An allow-list grant does NOT cover it. The list narrows by program name,
+  // and the program that opens a file is decided by the machine's association,
+  // so the list has nothing to check: honouring it would silently turn
+  // "only 7z and robocopy" into "anything with a file extension".
+  pods.onOpenPathRequest = async (id, request: OpenPathRequest): Promise<OpenPathResult> => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (!pod) return { ok: false, error: 'Unknown Pod.' }
+    if (typeof request?.path !== 'string' || request.path.trim() === '') {
+      return { ok: false, error: 'openPath expects a path relative to the granted folder.' }
+    }
+
+    const grant = pod.settings?.exec ?? (await askExecAccess(id, `open ${request.path}`))
+    if (!grant.allowed) return { ok: false, error: 'This Pod is not allowed to open files.' }
+    if (grant.allow && grant.allow.length > 0) {
+      return {
+        ok: false,
+        error:
+          'Opening a file needs Command Access granted without an allow-list: ' +
+          'the program that opens it is chosen by Windows, not by the command line.'
+      }
+    }
+
+    const root = await grantedRoot(id)
+    if (!root) return { ok: false, error: 'This Pod has no folder granted to it.' }
+
+    return openPathIn(root, request.path)
+  }
 
   // Closing DeskPods must not leave an agent session or a build running with
   // nobody able to see it or stop it any more.

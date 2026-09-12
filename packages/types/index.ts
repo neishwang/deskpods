@@ -64,6 +64,21 @@ export interface PodSettings {
   awake?: boolean
 }
 
+/** A file or folder a Pod's page asks Windows to open with its associated
+ *  program (see `openPath`). */
+export interface OpenPathRequest {
+  /** Path RELATIVE to the granted folder, same rule as git and readFile. */
+  path: string
+}
+
+export interface OpenPathResult {
+  ok: boolean
+  /** Absolute path actually opened, links resolved. */
+  path?: string
+  /** Set when DeskPods declined to open it, or the shell could not. */
+  error?: string
+}
+
 /** How `openPage` decides the target site is ready. */
 export interface OpenPageOptions {
   /** JavaScript expression evaluated in the page until it turns truthy, on top
@@ -763,6 +778,11 @@ export const IpcChannels = {
   podListDir: 'pods:listDir',
   podReadFile: 'pods:readFile',
   podWriteFile: 'pods:writeFile',
+  /** Pod page -> main: hand a file inside the granted folder to the program
+   *  Windows associates with it. Rides on the exec grant (see PodExecAccess),
+   *  and only an UNRESTRICTED one - the associated program cannot be named in
+   *  advance, so an allow-list cannot vouch for it. */
+  podOpenPath: 'pods:openPath',
   /** Pod page -> main: open / drive / close a background page. */
   podOpenPage: 'pods:openPage',
   podRunScript: 'pods:runScript',
