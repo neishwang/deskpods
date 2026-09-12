@@ -12,7 +12,7 @@ const EMPTY: FindResult = { matches: 0, activeMatch: 0 }
  * (`findInPage`); this bar only carries the query, the counter and the arrows.
  *
  * It lives in the chrome rather than above the Pod because a native
- * WebContentsView always paints over the renderer — so the workspace shrinks by
+ * WebContentsView always paints over the renderer - so the workspace shrinks by
  * exactly this bar's height and the bar slides up into the gap.
  */
 export function FindBar(): React.JSX.Element {
@@ -25,7 +25,7 @@ export function FindBar(): React.JSX.Element {
 
   // Focus on open, and again on every Ctrl+F: pressing it while the bar is
   // already open should let you retype straight away, as in a browser.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: findToken is a signal, not a value read here — re-running this effect is its only job.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: findToken is a signal, not a value read here - re-running this effect is its only job.
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()

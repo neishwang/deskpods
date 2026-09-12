@@ -16,10 +16,10 @@ import { usePodStore } from './usePodStore'
 /**
  * Asked the first time a Pod's page calls `window.__deskpods.git(...)`, or one
  * of the file calls that ride with the same grant (`listDir`, `readFile`,
- * `writeFile` — git already allows as much in that folder).
+ * `writeFile` - git already allows as much in that folder).
  *
  * Granting is deliberately two decisions in one: which Pod, and which folder.
- * The answer is remembered with the Pod, so this appears once per Pod — and
+ * The answer is remembered with the Pod, so this appears once per Pod - and
  * again from scratch if that Pod is deleted and recreated.
  */
 export function GitPermissionDialog({
@@ -85,8 +85,8 @@ export function GitPermissionDialog({
         <div className="flex gap-2 rounded-lg border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-3 py-2 text-xs text-[var(--color-muted)]">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#f59e0b]" />
           <span>
-            Any page this Pod loads will be able to run git there — and read or write the files in
-            that folder — with no further prompt. Only allow it for an app you trust. You can take
+            Any page this Pod loads will be able to run git there - and read or write the files in
+            that folder - with no further prompt. Only allow it for an app you trust. You can take
             it back from the Pod’s right-click menu.
           </span>
         </div>

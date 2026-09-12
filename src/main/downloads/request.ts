@@ -4,7 +4,7 @@ import { basename } from 'node:path'
  * What a download request from a page has to survive before Chromium sees it.
  *
  * Kept apart from `index.ts` (which owns the Electron side) so both rules can be
- * tested without an Electron runtime — the same reason `windows/hitTest.ts` sits
+ * tested without an Electron runtime - the same reason `windows/hitTest.ts` sits
  * beside its window.
  */
 

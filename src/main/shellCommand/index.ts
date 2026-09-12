@@ -9,8 +9,8 @@ import type { GitResult } from '@types'
  * This is deliberately NOT the git bridge. git is one program; a shell is every
  * program. The working directory is confined to the granted folder the same
  * way, but confinement buys little here: a command line can name an absolute
- * path of its own. The guard rail is therefore the permission itself, and — by
- * default — the allow-list of program names the user agreed to.
+ * path of its own. The guard rail is therefore the permission itself, and - by
+ * default - the allow-list of program names the user agreed to.
  */
 
 /** Same bound as git: long enough for a real build, short enough that a wedged
@@ -58,7 +58,7 @@ export function commandName(command: string): string {
  *
  * An absent or empty list means the user allowed every command, so anything
  * passes. With a list, both the program name AND the absence of shell operators
- * are required — otherwise the list would only decide how a command line
+ * are required - otherwise the list would only decide how a command line
  * starts, not what it does.
  */
 export function isAllowedCommand(command: string, allow?: string[]): boolean {
@@ -109,7 +109,7 @@ export function runCommand(
 
     // A secret belongs on stdin, not in the command line: what goes on the line
     // is shown in the permission dialog and listed by anything that can read
-    // the machine's processes. Closing the stream is part of the contract — a
+    // the machine's processes. Closing the stream is part of the contract - a
     // tool still waiting for input would hang until the timeout.
     if (child.stdin) {
       child.stdin.on('error', () => {

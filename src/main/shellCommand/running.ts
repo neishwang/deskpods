@@ -8,8 +8,8 @@ import type { ExecPollResult, ExecStartResult, PodId } from '@types'
  * followed while they run, and killed if need be.
  *
  * The page polls rather than subscribing: it keeps the whole Pod bridge in one
- * invoke-and-answer style, lets the caller choose its own cadence, and — the
- * reason that matters — a page that reloads mid-command finds it again by id
+ * invoke-and-answer style, lets the caller choose its own cadence, and - the
+ * reason that matters - a page that reloads mid-command finds it again by id
  * instead of losing an event stream.
  *
  * Output is buffered here between polls and handed over once, so a page that
@@ -78,7 +78,7 @@ export class RunningCommands {
   /**
    * Kill a process and everything it spawned. On Windows killing the shell
    * leaves its children running, which for an agent or a build means the work
-   * carries on unseen — `taskkill /T` is the only reliable way down the tree.
+   * carries on unseen - `taskkill /T` is the only reliable way down the tree.
    */
   private terminate(command: RunningCommand): void {
     const pid = command.child.pid
@@ -141,7 +141,7 @@ export class RunningCommands {
 
     // Secrets belong here rather than in the command line: a master password
     // written to stdin is never in the permission dialog, and never in the
-    // machine's process list. Closing the stream matters — a tool waiting for
+    // machine's process list. Closing the stream matters - a tool waiting for
     // more input would sit there until the timeout.
     if (options?.stdin !== undefined && child.stdin) {
       child.stdin.on('error', () => {
@@ -204,7 +204,7 @@ export class RunningCommands {
     return { ok: true }
   }
 
-  /** Drop everything a Pod started — it was deleted, suspended, or lost access. */
+  /** Drop everything a Pod started - it was deleted, suspended, or lost access. */
   killAllFor(podId: PodId): void {
     for (const command of [...this.commands.values()]) {
       if (command.podId !== podId) continue

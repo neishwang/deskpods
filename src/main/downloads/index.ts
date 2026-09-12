@@ -13,8 +13,8 @@ import { type DownloadItem, type Session, shell, type WebContents } from 'electr
  * Downloads run by a Pod's page, with the Pod's own session.
  *
  * Why this exists at all: a link opening a new window leaves DeskPods for the
- * default browser, which has its own cookies — so a file the Pod is logged in
- * for may well be a login page over there — and the page that asked for it never
+ * default browser, which has its own cookies - so a file the Pod is logged in
+ * for may well be a login page over there - and the page that asked for it never
  * learns where it went, or whether it arrived. Downloading here keeps the
  * session that is already authenticated, keeps the user in the app, and lets the
  * page follow the file it asked for.
@@ -29,7 +29,7 @@ import { type DownloadItem, type Session, shell, type WebContents } from 'electr
  *    page-suggested name is stripped to its last segment before being offered;
  *  - it never adopts a download it did not start. A Pod can be any site, and
  *    `will-download` also fires for a link the user clicked or for "Save Image
- *    As…" — those keep Electron's default behaviour and are reported to nobody.
+ *    As…" - those keep Electron's default behaviour and are reported to nobody.
  */
 
 /** A page in a loop must not be able to open a hundred sockets and Save
@@ -52,7 +52,7 @@ const MAX_REMEMBERED_PATHS = 64
  * Stop a download, tolerating an item Chromium has already taken away.
  *
  * A DownloadItem has no `isDestroyed()` to ask, and touching one that is gone
- * throws — which is why this is the only place that calls `cancel`.
+ * throws - which is why this is the only place that calls `cancel`.
  */
 function cancelItem(item: DownloadItem): void {
   try {
@@ -162,7 +162,7 @@ export class PodDownloads {
   }
 
   /**
-   * Show a finished file in the file manager — but only one this Pod
+   * Show a finished file in the file manager - but only one this Pod
    * downloaded. The contract the page sees is `reveal(path)`; what it may point
    * at is what it received, not any path it can name. A Pod is a web site, and a
    * web site does not get to open the file manager on someone's home folder.
@@ -216,7 +216,7 @@ export class PodDownloads {
    * Pair a download the session is starting with the request that asked for it.
    *
    * Matched on the web contents FIRST, so a Pod is never handed another Pod's
-   * download even when they share a session, then on the URL — including the
+   * download even when they share a session, then on the URL - including the
    * redirect chain, since a download link usually ends up somewhere else. A
    * download with no request behind it is left to Electron (its own Save dialog)
    * and reported to nobody: the page did not ask for it.

@@ -16,7 +16,7 @@ import { usePodStore } from './usePodStore'
 /**
  * The program a command line invokes, for the narrow grant. Mirrors
  * `commandName` in `@main/shellCommand`; the renderer cannot import from main,
- * and main checks the real thing anyway — this only labels the button.
+ * and main checks the real thing anyway - this only labels the button.
  */
 function programOf(command: string): string {
   const line = command.trim()
@@ -81,7 +81,7 @@ export function ExecPermissionDialog({
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#f59e0b]" />
           <span>
             A Pod is a web site. Allowing <strong className="font-semibold">every command</strong>{' '}
-            hands it this machine, not just a folder — anything you can run, it can run. Allowing
+            hands it this machine, not just a folder - anything you can run, it can run. Allowing
             only <span className="font-mono">{program}</span> keeps it to that program, and DeskPods
             will ask again for the next one. You can take it back from the Pod’s right-click menu.
           </span>

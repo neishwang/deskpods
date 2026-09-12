@@ -1,5 +1,5 @@
 /** Normalize user input into a valid URL, adding https:// when omitted.
- *  Local files (`file://`, e.g. a PDF or personal HTML) are accepted as-is —
+ *  Local files (`file://`, e.g. a PDF or personal HTML) are accepted as-is -
  *  they legitimately have an empty hostname. */
 export function normalizeUrl(raw: string): string | null {
   const trimmed = raw.trim()

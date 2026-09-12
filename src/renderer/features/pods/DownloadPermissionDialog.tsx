@@ -36,7 +36,7 @@ function fileOf(url: string): string {
  *
  * Milder than the git/command prompts, and it says so: nothing runs, nothing is
  * read, and the user still answers a Save dialog for every single file. What is
- * being granted is the Pod's session — the file arrives logged in as this Pod,
+ * being granted is the Pod's session - the file arrives logged in as this Pod,
  * which is the reason not to send it to the default browser in the first place.
  */
 export function DownloadPermissionDialog({
@@ -90,7 +90,7 @@ export function DownloadPermissionDialog({
         </div>
 
         <p className="px-1 text-xs text-[var(--color-muted)]">
-          You choose where every file goes — DeskPods asks each time. The page is only told how far
+          You choose where every file goes - DeskPods asks each time. The page is only told how far
           along the download is. You can take this back from the Pod’s right-click menu.
         </p>
 

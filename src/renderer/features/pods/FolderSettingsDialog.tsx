@@ -69,7 +69,7 @@ export function FolderSettingsDialog({ id }: { id: FolderId }): React.JSX.Elemen
             <Input
               value={icon}
               onChange={(e) => setIcon(e.target.value)}
-              placeholder="📁  — shown when the folder is open"
+              placeholder="📁  shown when the folder is open"
               maxLength={4}
             />
           </div>

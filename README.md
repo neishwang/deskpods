@@ -4,7 +4,7 @@
 
 DeskPods hosts web applications inside isolated Pods: a sidebar of icons, one app
 visible at a time, no tabs, no address bar, no browser chrome. It is not a
-browser — it is a dedicated place for the handful of tools that would otherwise
+browser - it is a dedicated place for the handful of tools that would otherwise
 monopolise a browser window: Gmail, Teams, Slack, Notion, Jira, an internal
 dashboard, anything that runs in Chromium.
 
@@ -12,18 +12,18 @@ A Pod is a URL. There is no catalogue and no list of supported apps.
 
 ## Isolation
 
-Each Pod owns a persistent Chromium partition — its own cookies, localStorage,
+Each Pod owns a persistent Chromium partition - its own cookies, localStorage,
 IndexedDB, cache, service workers and credentials. Two Pods pointing at the same
 service are two independent accounts, and neither can see the other's session.
 
 When you *want* a shared login (one Google account across Gmail, Calendar and
 Drive), create the Pod as *linked*: it reuses the partition of an existing Pod
-on purpose. Folders never affect isolation — they are purely visual.
+on purpose. Folders never affect isolation - they are purely visual.
 
 A Pod's pages are also held to what a web app actually needs: notifications
 (the unread badge is built on them), the clipboard, fullscreen, pointer lock and
 storage. Microphone, camera, screen capture, location, USB, serial, HID and idle
-detection are refused outright — a Pod is a web site, and none of those should be
+detection are refused outright - a Pod is a web site, and none of those should be
 granted just because it asked.
 
 ## Getting started
@@ -45,7 +45,7 @@ bun run build:win
 
 **Pods.** The `+` button adds one from a URL; the name and favicon are detected
 from the page. Right-click a Pod for Rename, Edit URL, Move to, Suspend and
-Delete. Suspend frees a Pod's memory and GPU cost without touching its session —
+Delete. Suspend frees a Pod's memory and GPU cost without touching its session -
 the next click reloads it.
 
 **Folders.** Drop a Pod onto another to create a folder holding both. Drag to
@@ -59,7 +59,7 @@ left empty disappears on its own.
 | `F5`, `Ctrl+R` | reload (`Shift` variants ignore the cache) |
 | `Alt+←`, `Alt+→`, mouse side buttons | history |
 | `Ctrl+wheel`, `Ctrl++`, `Ctrl+-`, `Ctrl+0` | zoom, remembered per Pod, shown as a pill above the page |
-| `Ctrl+F` | find in page — again to close, `Enter` / `Shift+Enter` to step, with a *Match case* box |
+| `Ctrl+F` | find in page - again to close, `Enter` / `Shift+Enter` to step, with a *Match case* box |
 
 Right-click gives the usual page menu: spelling suggestions, undo/redo, image
 actions, opening or searching a selection in your real browser, back/forward and
@@ -70,7 +70,7 @@ they become themed toasts above the page, and the taskbar icon carries the total
 unread count (read from page titles, e.g. `(3) Discord`).
 
 **Keep Awake.** Only the Pod on screen is visible, so Chromium backgrounds the
-others: their timers slow down and the page is told it is hidden — which is how
+others: their timers slow down and the page is told it is hidden - which is how
 a chat app decides you are away and drops its connection. *Keep Awake* in a
 Pod's right-click menu opts that Pod out, and loads it a few seconds after
 startup instead of on first click, so it is connected and notifying before you
@@ -107,7 +107,7 @@ the folder git may work in. Your answer is stored **with that Pod**:
 - deny once, and every later call is refused without a prompt;
 - take it back from the Pod's right-click menu (*Revoke Git Access* /
   *Reset Git Permission*), which makes the next call ask again;
-- delete the Pod and the answer goes with it — recreating a Pod on the same URL
+- delete the Pod and the answer goes with it - recreating a Pod on the same URL
   asks from scratch, since permission follows the Pod, not the address.
 
 While the prompt is open, further calls from that Pod wait on the same dialog
@@ -119,7 +119,7 @@ rather than stacking prompts.
   be a relative path that stays inside it; absolute paths and anything climbing
   out with `..` are refused.
 - **No shell.** Arguments are passed as an array straight to the process, so
-  `&&`, `|`, backticks and the rest are inert — they reach git as literal
+  `&&`, `|`, backticks and the rest are inert - they reach git as literal
   arguments and it complains about them.
 - **No hanging.** Commands run with `GIT_TERMINAL_PROMPT=0` (a credential prompt
   would have no terminal to appear on), no pager, a 120 s timeout and a 16 MB
@@ -128,7 +128,7 @@ rather than stacking prompts.
 ### What is not
 
 **Every git command is allowed.** DeskPods does not filter subcommands or flags,
-and some git flags run other programs by design — `git -c core.pager=<program>`,
+and some git flags run other programs by design - `git -c core.pager=<program>`,
 `--upload-pack`, repository aliases. So any page loaded in an authorised Pod can
 execute arbitrary code on your machine, not merely touch a repository. Grant this
 to a Pod that loads an app you trust, keep such a Pod pointed at that app, and
@@ -136,7 +136,7 @@ revoke it when you no longer need it.
 
 ## Reading files from a Pod
 
-The folder you granted for git is also readable — and writable — through three
+The folder you granted for git is also readable - and writable - through three
 calls, because a Pod that may run git there can already list it, read what is
 tracked and rewrite the tree with a checkout. No extra prompt: the same grant,
 the same folder, the same confinement.
@@ -162,12 +162,12 @@ folder is an `ok: false` answer, never a rejected promise.
 
 ## Running a command from a Pod
 
-Anything that is not git — a build, a deployment script, an archiver — goes
+Anything that is not git - a build, a deployment script, an archiver - goes
 through `exec`, which runs a real command line through the system shell:
 
 ```js
 const result = await window.__deskpods.exec('dotnet build -c Release')
-// { ok, code, stdout, stderr, error? } — the same shape as git()
+// { ok, code, stdout, stderr, error? } - the same shape as git()
 
 await window.__deskpods.exec('npm ci', { cwd: 'web', timeout: 300000 })
 ```
@@ -188,8 +188,8 @@ const r = await window.__deskpods.exec('keepassxc-cli show -q -a Password vault.
 })
 ```
 
-For anything that runs longer than an answer — an agent session, a build, a
-deployment — start it and follow it:
+For anything that runs longer than an answer - an agent session, a build, a
+deployment - start it and follow it:
 
 ```js
 const { id } = await window.__deskpods.execStart(
@@ -208,12 +208,12 @@ await window.__deskpods.execKill(id)            // ...or stop it early
 ```
 
 `execStart` resolves with `{ ok, id, error? }`, `execPoll` with
-`{ ok, running, stdout, stderr, code?, truncated?, error? }` — each poll carries
+`{ ok, running, stdout, stderr, code?, truncated?, error? }` - each poll carries
 only what was printed since the previous one, so appending them in order gives
 the whole output. `truncated` says output had to be dropped because nothing
 polled for 4 MB. The default limit is 30 minutes (up to 24 h via `timeout`),
 four commands at a time per Pod, and everything a Pod started is killed when it
-is suspended, when Command Access is revoked, and when DeskPods quits — down the
+is suspended, when Command Access is revoked, and when DeskPods quits - down the
 whole process tree, so nothing carries on unseen.
 
 Because the page polls rather than subscribing, a page that reloads mid-command
@@ -225,7 +225,7 @@ Two things to know when the command is an agent or any interactive tool:
 
 - **stdin is closed behind you**, whether you passed one or not. A tool that
   stops to ask for confirmation will never get an answer and will sit there
-  until its timeout — so run it in whatever non-interactive mode it offers
+  until its timeout - so run it in whatever non-interactive mode it offers
   (`--force` for `cursor-agent`, `-q` for `keepassxc-cli`, `--yes`, `--no-input`
   and friends elsewhere).
 - **a poll hands over bytes, not lines.** It returns whatever arrived since the
@@ -249,12 +249,12 @@ nothing when a command line can name an absolute path of its own.
 
 The prompt shows the exact line the page wants to run and offers two grants:
 
-- **Allow “dotnet”** — only that program. DeskPods asks again the first time the
+- **Allow “dotnet”** - only that program. DeskPods asks again the first time the
   Pod reaches for another one, and adds it to the list if you agree. While a
   list is in force, a line chaining a second command (`&`, `&&`, `|`, `;`, a
   redirection, `$(…)`, a backquote or a newline) is refused whatever it starts
   with, so `dotnet & rmdir /s /q data` does not slip through.
-- **Allow every command** — the Pod may run anything you can run. A Pod is a web
+- **Allow every command** - the Pod may run anything you can run. A Pod is a web
   site; this hands it the machine, not a folder.
 
 Denying is remembered too, and *Revoke Command Access* / *Reset Command
@@ -267,7 +267,7 @@ it is ready, run as many scripts as needed against that same loaded document,
 then close it.
 
 ```js
-// Open once, and wait for the site to be genuinely ready — not just loaded.
+// Open once, and wait for the site to be genuinely ready - not just loaded.
 const page = await window.__deskpods.openPage('https://target.example', {
   waitFor: "typeof _MCS !== 'undefined'",
   timeout: 30000
@@ -289,7 +289,7 @@ soon as the page finishes loading.
 
 `runScript(id, code)` resolves with `{ ok, value, error? }`. The code runs in the
 page's own world, so globals the site defines are reachable, and its result is
-awaited — an API returning a promise gives you the resolved value. A script that
+awaited - an API returning a promise gives you the resolved value. A script that
 throws comes back as `ok: false` with the message rather than as a rejection.
 Values travel as JSON, so anything unserialisable (a DOM node, a circular
 object) is reported as an error instead of arriving mangled.
@@ -300,7 +300,7 @@ and the next one still sees it.
 ### Permission
 
 Like git, the first call raises a one-shot prompt for that Pod, and the answer
-is remembered with it — revocable from the Pod's right-click menu (*Revoke Page
+is remembered with it - revocable from the Pod's right-click menu (*Revoke Page
 Scripting*), forgotten when the Pod is deleted. The two permissions are separate:
 granting git does not grant this.
 
@@ -321,11 +321,11 @@ suspended or deleted, and when the permission is revoked.
 A download started by a Pod stays in DeskPods, on that Pod's session. The point
 is the session: a link handed to your default browser is a link followed by
 someone else's cookies, so a file the Pod is logged in for often turns into a
-login page over there — and the page never learns where the file went, or whether
+login page over there - and the page never learns where the file went, or whether
 it arrived.
 
 ```js
-// Returns as soon as the download has begun — not when it finishes.
+// Returns as soon as the download has begun - not when it finishes.
 const { ok, id, error } = await window.__deskpods.download.start(url, {
   fileName: 'refresh-2026-09.zip'
 })
@@ -363,27 +363,27 @@ One prompt per Pod, like the others, remembered with it and revocable from its
 right-click menu (*Revoke Download Access*). It is the mildest of the bridges:
 nothing runs and nothing is read, **you** still choose where every single file
 goes, and the page is only told how far along it is. Revoking stops whatever was
-still downloading — a transfer nobody can see or cancel any more has no business
+still downloading - a transfer nobody can see or cancel any more has no business
 continuing.
 
 Practical limits: `http`/`https` only (a `blob:` belongs to the page's own
 context, and `file://` would make this a way to copy your disk around), at most
 4 downloads at a time per Pod, and the file name a page suggests is reduced to a
-bare name before it is offered in the dialog — the folder is never the page's
+bare name before it is offered in the dialog - the folder is never the page's
 choice. `reveal(path)` only opens files that Pod actually downloaded; a Pod is a
 web site, and a web site does not get to open your file manager wherever it
 likes.
 
-A download DeskPods did not start — a link you clicked in a page, *Save Image
-As…* — behaves as before and is reported to no page.
+A download DeskPods did not start - a link you clicked in a page, *Save Image
+As…* - behaves as before and is reported to no page.
 
 ## Where your data lives
 
 In a packaged build DeskPods is portable: settings *and* every Pod's Chromium
 profile live in a `data/` folder next to the executable, so moving the app moves
 your sessions with it. In development they sit in the usual Electron `userData`
-directory. The app's own state — Pods, folders, per-Pod zoom and git
-permissions — is a single `deskpods/state.json`.
+directory. The app's own state - Pods, folders, per-Pod zoom and git
+permissions - is a single `deskpods/state.json`.
 
 Unread state is never persisted; it is derived at runtime.
 
@@ -395,7 +395,7 @@ quietly pretending you never had any Pods.
 ## Releases
 
 Pushing a `v*` tag builds Windows artifacts on CI and publishes them as a GitHub
-release — see [.github/workflows/release.yml](.github/workflows/release.yml).
+release - see [.github/workflows/release.yml](.github/workflows/release.yml).
 The workflow refuses to publish if the tag and `package.json` disagree, or if
 typecheck, lint or tests fail.
 
@@ -405,7 +405,7 @@ git tag -a v1.1.0 -m "…" && git push origin v1.1.0
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Fork it, ship it, do what you like with it.
+MIT - see [LICENSE](LICENSE). Fork it, ship it, do what you like with it.
 
 ## Development
 
@@ -421,15 +421,15 @@ bun run build:win    # zip + portable exe into dist/
 
 Three bundles plus a shared package:
 
-- `packages/types` — domain models, the typed IPC surface and channel names.
+- `packages/types` - domain models, the typed IPC surface and channel names.
   No Electron import; every new channel starts here.
-- `src/main` — owns all state and all web content: one `WebContentsView` per
+- `src/main` - owns all state and all web content: one `WebContentsView` per
   Pod, native menus, notifications, persistence, the git / command / file /
   download bridges and the background pages a Pod can drive.
-- `src/preload` — two bridges: `window.deskpods` for the chrome, and a minimal
+- `src/preload` - two bridges: `window.deskpods` for the chrome, and a minimal
   `window.__deskpods` (notifications, git, commands, files, downloads,
   background pages) injected into Pod pages.
-- `src/renderer` — the React chrome (sidebar, dialogs, find bar), plus a second
+- `src/renderer` - the React chrome (sidebar, dialogs, find bar), plus a second
   tiny renderer in `src/overlay` for what must paint above the Pods.
 
 One constraint shapes most of the UI: a `WebContentsView` always paints above

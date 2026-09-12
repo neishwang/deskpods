@@ -4,7 +4,7 @@ import { resolveInside } from '@main/git'
 import type { FileEncoding, ListDirResult, ReadFileResult, WriteFileResult } from '@types'
 
 /**
- * Reading a folder, a file, and writing one back — on behalf of a Pod's page,
+ * Reading a folder, a file, and writing one back - on behalf of a Pod's page,
  * inside the folder granted to it.
  *
  * These ride under the EXISTING git permission rather than one of their own: a
@@ -30,7 +30,7 @@ function isEncoding(value: unknown): value is FileEncoding {
  * One level of a folder, never recursive: a recursive walk of a drive would
  * never answer, and a caller that wants to descend knows how to call again.
  *
- * Entries are returned as they are, hidden ones included — what to keep is the
+ * Entries are returned as they are, hidden ones included - what to keep is the
  * caller's decision, not ours.
  */
 export async function listDirectory(root: string, requested?: string): Promise<ListDirResult> {
@@ -52,7 +52,7 @@ export async function listDirectory(root: string, requested?: string): Promise<L
 /**
  * A file's content, as text by default or base64 for anything binary (an image,
  * a PDF, an archive). A missing file answers `{ ok: false }` like everything
- * else here — never an exception, because the whole caller is written that way.
+ * else here - never an exception, because the whole caller is written that way.
  */
 export async function readFileAt(
   root: string,
@@ -85,7 +85,7 @@ export async function readFileAt(
 
 /**
  * Writes a file inside the granted folder, replacing it if it exists. Missing
- * parent folders are created, but only ever under the granted root — the same
+ * parent folders are created, but only ever under the granted root - the same
  * resolution refuses everything else.
  */
 export async function writeFileAt(

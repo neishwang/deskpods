@@ -6,7 +6,7 @@ import { BrowserWindow, screen } from 'electron'
 /**
  * A transparent, click-through child window layered exactly over the main
  * window's content area. It hosts UI that must paint ABOVE the Pods' native
- * WebContentsViews (which always cover the renderer chrome) — currently
+ * WebContentsViews (which always cover the renderer chrome) - currently
  * tooltips, later the command palette. Returns null if creation fails so the
  * app keeps working without it.
  */
@@ -50,7 +50,7 @@ export function createOverlayWindow(parent: BrowserWindow): BrowserWindow | null
     sync()
 
     // The overlay stays HIDDEN until main shows it to draw a tooltip/toast
-    // (and hides it again once the overlay reports idle) — a visible
+    // (and hides it again once the overlay reports idle) - a visible
     // transparent window is blended by the compositor every frame for nothing.
     parent.on('move', sync)
     parent.on('resize', sync)
@@ -75,14 +75,14 @@ export function createOverlayWindow(parent: BrowserWindow): BrowserWindow | null
 }
 
 /**
- * Makes parts of the click-through overlay clickable — today the toasts, which
+ * Makes parts of the click-through overlay clickable - today the toasts, which
  * are dismissed by clicking them.
  *
  * The overlay reports the regions that must receive clicks, and the cursor is
  * sampled while any exists: mouse events are handed to the window only while
  * the pointer sits inside one, so everything else still passes straight to the
  * Pod underneath. Sampling rather than `setIgnoreMouseEvents(true, { forward:
- * true })` on purpose — forwarding move events is what made the cursor flicker
+ * true })` on purpose - forwarding move events is what made the cursor flicker
  * on Windows. The timer only runs while something is clickable (a few seconds
  * per notification), never while idle.
  *

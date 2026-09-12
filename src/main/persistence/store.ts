@@ -63,7 +63,7 @@ export function loadState(): AppState {
     raw = readFileSync(file, 'utf-8')
   } catch {
     // Unreadable (locked, permissions): start on the defaults, but do NOT touch
-    // the file — the next launch may well read it fine.
+    // the file - the next launch may well read it fine.
     return defaultState()
   }
 

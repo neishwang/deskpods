@@ -62,7 +62,7 @@ prepareCache()
 try {
   run('electron-builder --win')
 } catch (err) {
-  console.log('[build-win] Packaging failed — attempting winCodeSign fix + one retry...')
+  console.log('[build-win] Packaging failed - attempting winCodeSign fix + one retry...')
   if (prepareCache()) run('electron-builder --win')
   else throw err
 }

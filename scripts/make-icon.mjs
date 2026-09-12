@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
  *
  * The .ico carries EVERY size Windows asks for (16 -> 256), each one rendered
  * from the vector design at its native resolution instead of letting Windows
- * downscale a single 256px bitmap — that downscale is what made the taskbar and
+ * downscale a single 256px bitmap - that downscale is what made the taskbar and
  * title-bar icons look mushy.
  */
 import zlib from 'node:zlib'

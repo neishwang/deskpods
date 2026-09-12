@@ -8,12 +8,12 @@ import { BrowserWindow } from 'electron'
  * scripts against that same loaded document, read the results, close it.
  *
  * The page is a hidden window on the CALLING POD'S partition, so it carries
- * that Pod's login — which is the point, and also why the capability sits
+ * that Pod's login - which is the point, and also why the capability sits
  * behind a per-Pod permission. It gets no preload, so the site being driven
  * never sees a DeskPods bridge of its own.
  *
  * Scripts run in the page's own world (not an isolated one), so globals the
- * site defines — `_MCS` and friends — are reachable.
+ * site defines - `_MCS` and friends - are reachable.
  */
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -157,7 +157,7 @@ export class BackgroundPages {
     page.window.destroy()
   }
 
-  /** Drop every page a Pod opened — it was deleted, suspended, or lost access. */
+  /** Drop every page a Pod opened - it was deleted, suspended, or lost access. */
   closeAllFor(podId: PodId): void {
     for (const page of [...this.pages.values()]) {
       if (page.podId !== podId) continue

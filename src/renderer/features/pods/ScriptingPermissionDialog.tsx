@@ -76,7 +76,7 @@ export function ScriptingPermissionDialog({
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#f59e0b]" />
           <span>
             Allowing this covers <strong className="font-semibold">any</strong> site, not just this
-            one, and pages load logged in as this Pod — so it can read whatever this Pod can reach.
+            one, and pages load logged in as this Pod - so it can read whatever this Pod can reach.
             You can take it back from the Pod’s right-click menu.
           </span>
         </div>
