@@ -32,19 +32,37 @@ interface Harness {
   rerun?: () => void
   /** Only set with `bridgeLate`: makes the bridge appear, as the preload does. */
   attachBridge?: () => void
+  /** Rewrite the media session's metadata, as a page does. */
+  setMetadata?: (meta: { title?: string; artist?: string } | null) => void
+  /** Move an element's position, to reach mid-track. */
+  setTime?: (index: number, seconds: number) => void
+  /** Give an element a new length, which is a new media. */
+  setDuration?: (index: number, seconds: number) => void
 }
 
 /** Run the hook against a fake page. `elements` are what querySelectorAll
  *  returns for 'video, audio'; `metadata` is the media session's. */
 function run(options: {
-  elements?: Array<{ paused: boolean; duration?: number; currentTime?: number; volume?: number }>
+  elements?: Array<{
+    paused: boolean
+    duration?: number
+    currentTime?: number
+    volume?: number
+    muted?: boolean
+  }>
   metadata?: { title?: string; artist?: string; album?: string; artwork?: unknown[] } | null
   playbackState?: string
   registerHandlers?: boolean
   /** Run the hook before window.__deskpods exists, as document-start does. */
   bridgeLate?: boolean
 }): Harness {
-  const elements = options.elements ?? []
+  // volume defaults to 1 and muted to false, as a real element does: the pick
+  // below reads both.
+  const elements = (options.elements ?? []).map((el) => ({
+    volume: 1,
+    muted: false,
+    ...el
+  }))
   const harness: Harness = { reports: [], command: null, tick: () => {}, handlers: {} }
 
   const mediaSession: Record<string, unknown> = {
@@ -111,6 +129,15 @@ function run(options: {
     invoke()
   }
   harness.rerun = invoke
+  harness.setMetadata = (meta) => {
+    mediaSession.metadata = meta
+  }
+  harness.setTime = (index, seconds) => {
+    elements[index].currentTime = seconds
+  }
+  harness.setDuration = (index, seconds) => {
+    elements[index].duration = seconds
+  }
 
   // The page registers its handlers after the hook wrapped setActionHandler,
   // which is the order that lets them be captured at all.
@@ -239,6 +266,80 @@ describe('MEDIA_HOOK', () => {
     const report = local.reports[local.reports.length - 1]
     expect(report.canVolume).toBe(true)
     expect(report.canSeek).toBe(true)
+  })
+
+  it('ignores a muted preview while something audible is playing', () => {
+    // YouTube's hover preview: a second element, playing, muted. It used to win
+    // simply by not being paused, so the player showed a video nobody could
+    // hear and the buttons drove it instead of the real track.
+    const h = run({
+      elements: [
+        { paused: false, muted: true, duration: 30, currentTime: 3 },
+        { paused: false, duration: 200, currentTime: 120, volume: 0.8 }
+      ],
+      playbackState: 'playing'
+    })
+    const last = h.reports[h.reports.length - 1]
+    expect(last.position).toBe(120)
+    expect(last.duration).toBe(200)
+  })
+
+  it('prefers the real player paused over a muted preview playing', () => {
+    // Between tracks, hovering a thumbnail must not make the preview the
+    // subject of the player.
+    const h = run({
+      elements: [
+        { paused: false, muted: true, duration: 30, currentTime: 3 },
+        { paused: true, duration: 200, currentTime: 42, volume: 1 }
+      ]
+    })
+    const last = h.reports[h.reports.length - 1]
+    expect(last.position).toBe(42)
+    expect(last.playing).toBe(false)
+  })
+
+  it('keeps the title when the page renames the session mid-track', () => {
+    // The hover-preview channel that mattered: YouTube rewrites the session for
+    // the thumbnail under the pointer, and it does so a moment BEFORE the muted
+    // preview element starts - so watching for that element is not enough. A
+    // description arriving 60 seconds into a track is about something else.
+    const h = run({
+      elements: [{ paused: false, duration: 236, currentTime: 1, volume: 1 }],
+      metadata: { title: 'The real track' },
+      playbackState: 'playing'
+    })
+    expect(h.reports[h.reports.length - 1].title).toBe('The real track')
+
+    // Mid-track now, and the page says something different.
+    h.setMetadata?.({ title: 'A hovered thumbnail' })
+    h.setTime?.(0, 60)
+    h.tick()
+    expect(h.reports[h.reports.length - 1].title).toBe('The real track')
+  })
+
+  it('takes the new title when the media itself changes', () => {
+    const h = run({
+      elements: [{ paused: false, duration: 236, currentTime: 90, volume: 1 }],
+      metadata: { title: 'First' },
+      playbackState: 'playing'
+    })
+    h.setMetadata?.({ title: 'Second' })
+    // A different length is a different media, whatever the position says.
+    h.setDuration?.(0, 180)
+    h.tick()
+    expect(h.reports[h.reports.length - 1].title).toBe('Second')
+  })
+
+  it('believes the element over a session that says paused', () => {
+    // Hovering a YouTube thumbnail points playbackState at the preview and sets
+    // it to 'paused'. Read from there, the player announced that the music had
+    // stopped while it was plainly still playing.
+    const h = run({
+      elements: [{ paused: false, duration: 200, currentTime: 50, volume: 1 }],
+      metadata: { title: 'x' },
+      playbackState: 'paused'
+    })
+    expect(h.reports[h.reports.length - 1].playing).toBe(true)
   })
 
   it('picks the largest artwork offered', () => {
