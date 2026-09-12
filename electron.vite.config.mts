@@ -19,7 +19,14 @@ export default defineConfig({
         // because the preloads have to (see below), and `main` in package.json
         // points at `out/main/index.js`. An ESM build renames it to `.mjs`.
         output: { format: 'cjs' },
-        input: { index: resolve('src/main/index.ts') }
+        // Two entries: the app, and the filter-engine builder that main forks
+        // into a `utilityProcess` (see src/main/adblock/engineWorker.ts). It
+        // has to be a file on disk of its own, so it cannot be bundled into
+        // index.js.
+        input: {
+          index: resolve('src/main/index.ts'),
+          engineWorker: resolve('src/main/adblock/engineWorker.ts')
+        }
       }
     }
   },

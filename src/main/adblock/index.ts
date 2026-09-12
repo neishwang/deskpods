@@ -1,8 +1,8 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { adsAndTrackingLists } from '@ghostery/adblocker'
+import { adsAndTrackingLists, Request } from '@ghostery/adblocker'
 import { ElectronBlocker } from '@ghostery/adblocker-electron'
-import { app, type Session } from 'electron'
+import { app, type Session, utilityProcess } from 'electron'
 
 /**
  * Ad and tracker blocking, per Pod session.
@@ -48,6 +48,10 @@ const CACHE_FILE = 'adblock/engine.bin'
  */
 const MAX_CACHE_AGE_MS = 3 * 24 * 60 * 60 * 1000
 
+/** How long the off-thread build is given before falling back. The lists come
+ *  off the network with retries of their own, so this is generous. */
+const WORKER_TIMEOUT_MS = 90_000
+
 export class AdBlock {
   /** The in-flight or settled build. Kept as the promise, not the value, so
    *  two Pods enabling at once share one build instead of racing two. */
@@ -58,54 +62,113 @@ export class AdBlock {
    *  linked Pods hand over the same object. */
   private readonly active = new Set<Session>()
 
-  private async build(): Promise<ElectronBlocker> {
-    const caching = {
-      path: join(app.getPath('userData'), CACHE_FILE),
-      read: async (file: string) => {
-        const info = await stat(file)
-        // Rejecting is the only way to ask for a refresh: `fromCached` treats
-        // any failure here as "no cache" and rebuilds from the lists, then
-        // writes the result back through `write` below.
-        if (Date.now() - info.mtimeMs > MAX_CACHE_AGE_MS) {
-          throw new Error('Filter cache is stale; rebuilding from the lists.')
-        }
-        return readFile(file)
-      },
-      write: async (file: string, buffer: Uint8Array) => {
-        await mkdir(dirname(file), { recursive: true })
-        await writeFile(file, buffer)
+  /**
+   * uBlock Origin's default list set, and what to do with it.
+   *
+   * Its own filters (filters.txt and the yearly ones, badware, privacy,
+   * quick-fixes, resource-abuse, unbreak) alongside EasyList, EasyPrivacy and
+   * Peter Lowe's - the same combination uBO ships enabled. Built from the lists
+   * rather than from a prebuilt engine so this config applies at parse time.
+   *
+   * `loadCosmeticFilters` is TRUE, and that is the point: the rules that stop
+   * YouTube's ads are cosmetic ones and have to be parsed to exist at all. What
+   * is switched off, later and only for the library's own use, is its way of
+   * INJECTING them (see `enable`).
+   */
+  private static readonly CONFIG = { loadCosmeticFilters: true, loadNetworkFilters: true }
+
+  private cacheFile(): string {
+    return join(app.getPath('userData'), CACHE_FILE)
+  }
+
+  /** The cached engine, or null when there is none or it has gone stale. */
+  private async fromCache(): Promise<ElectronBlocker | null> {
+    try {
+      const file = this.cacheFile()
+      const info = await stat(file)
+      if (Date.now() - info.mtimeMs > MAX_CACHE_AGE_MS) return null
+      return ElectronBlocker.deserialize(await readFile(file))
+    } catch {
+      // Absent, unreadable, or written by another version of the library.
+      return null
+    }
+  }
+
+  private async toCache(bytes: Uint8Array): Promise<void> {
+    try {
+      const file = this.cacheFile()
+      await mkdir(dirname(file), { recursive: true })
+      await writeFile(file, bytes)
+    } catch {
+      // The engine still works; it just will not survive a restart.
+    }
+  }
+
+  /**
+   * Build the engine in a `utilityProcess` and bring back the bytes.
+   *
+   * Parsing ~100k rules is one synchronous pass. Done in main it owns the
+   * thread for about a second, so window drags, native menus and every other
+   * Pod's IPC queue behind it - on the first launch and on every refresh of the
+   * lists. Deserializing the result here is milliseconds, so main only pays
+   * that.
+   *
+   * Resolves null on any failure, which the caller treats as "build it here
+   * instead": a Pod that asked for blocking should get it even if forking does
+   * not work.
+   */
+  private buildOffThread(): Promise<Uint8Array | null> {
+    return new Promise((resolve) => {
+      let child: Electron.UtilityProcess
+      try {
+        child = utilityProcess.fork(join(__dirname, 'engineWorker.js'))
+      } catch {
+        resolve(null)
+        return
       }
+
+      let settled = false
+      const finish = (bytes: Uint8Array | null) => {
+        if (settled) return
+        settled = true
+        clearTimeout(deadline)
+        try {
+          child.kill()
+        } catch {
+          // Already gone.
+        }
+        resolve(bytes)
+      }
+
+      // The lists come off the network, so this can legitimately take a while -
+      // but not forever, and a hung fetch must not leave a Pod unblocked with
+      // nothing deciding otherwise.
+      const deadline = setTimeout(() => finish(null), WORKER_TIMEOUT_MS)
+
+      child.on('message', (message: { ok?: boolean; engine?: Uint8Array }) => {
+        finish(message?.ok === true && message.engine ? message.engine : null)
+      })
+      child.on('exit', () => finish(null))
+      child.postMessage({ lists: adsAndTrackingLists, ...AdBlock.CONFIG })
+    })
+  }
+
+  private async build(): Promise<ElectronBlocker> {
+    const cached = await this.fromCache()
+    if (cached) return cached
+
+    const bytes = await this.buildOffThread()
+    if (bytes) {
+      // Written in the background: the engine is ready, and a Pod waiting on it
+      // should not also wait on the disk.
+      void this.toCache(bytes)
+      return ElectronBlocker.deserialize(bytes)
     }
 
-    /**
-     * uBlock Origin's own lists.
-     *
-     * `adsAndTrackingLists` is uBO's default set - its filters (filters.txt and
-     * the yearly ones, badware, privacy, quick-fixes, resource-abuse, unbreak)
-     * alongside EasyList, EasyPrivacy and Peter Lowe's, which is the same
-     * combination uBO ships enabled. Built from the lists rather than from the
-     * prebuilt engine so the config applies at parse time, and cached on disk
-     * so the parse happens once.
-     *
-     * `loadCosmeticFilters` is TRUE here, and that is the point: the rules that
-     * stop YouTube's ads are cosmetic ones and have to be parsed to exist. What
-     * is switched off, later, is the library's way of INJECTING them.
-     */
-    const blocker = await ElectronBlocker.fromLists(
-      fetch,
-      adsAndTrackingLists,
-      { loadCosmeticFilters: true, loadNetworkFilters: true },
-      caching
-    )
-
-    // uBO's scriptlets are NOT fetched here: `fromLists` already downloads
-    // resources.json and applies it to the engine. Doing it again re-downloaded
-    // 180 kB to be told the checksum had not changed.
-    //
-    // They are what actually blocks the ads. A filter like
-    // `youtube.com##+js(json-prune, playerAds adPlacements)` says which
-    // scriptlet to run and with what arguments; the code for `json-prune` comes
-    // from that file. Lists without it match and then have nothing to execute.
+    // Forking failed. Blocking matters more than the stall, so it is built
+    // here, and the result is still cached so this happens once.
+    const blocker = await ElectronBlocker.fromLists(fetch, adsAndTrackingLists, AdBlock.CONFIG)
+    void this.toCache(blocker.serialize())
     return blocker
   }
 
@@ -170,7 +233,14 @@ export class AdBlock {
   /** Stop blocking in this session. Unknown sessions are simply ignored. */
   disable(session: Session): void {
     if (!this.active.delete(session)) return
-    this.engine
+    const engine = this.engine
+    // Released with the last Pod that wanted it. The filter set is the bulk of
+    // this feature's memory, and holding it for a process where blocking is now
+    // off everywhere is the cost this module's own "a Pod that does not ask
+    // pays nothing" promise rules out. Coming back is a deserialize from the
+    // disk cache, which is milliseconds.
+    if (this.active.size === 0) this.engine = null
+    engine
       ?.then((blocker) => blocker.disableBlockingInSession(session))
       .catch(() => {
         // The engine never built, so nothing was ever enabled to undo.
@@ -203,20 +273,16 @@ export class AdBlock {
       return null
     }
 
-    let parsed: URL
-    try {
-      parsed = new URL(url)
-    } catch {
-      return null
-    }
+    // Parsed by the engine's OWN helper, so the keys it is asked about are the
+    // keys its filters were compiled under. Deriving the domain by hand -
+    // taking the last two labels - is wrong for every multi-part public suffix:
+    // www.bbc.co.uk gives co.uk and foo.com.au gives com.au, and domain-scoped
+    // rules then miss silently on those sites, which is the one thing this
+    // module exists to prevent. `Request` consults the public suffix list.
+    const request = Request.fromRawDetails({ url })
     // Only pages. An about: or a file: has no rules and no ads.
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
-
-    const hostname = parsed.hostname
-    // Registrable domain, close enough for rule lookup: the engine matches on
-    // hostname and uses this for the generic pass.
-    const parts = hostname.split('.')
-    const domain = parts.length > 2 ? parts.slice(-2).join('.') : hostname
+    if (!request.isHttp && !request.isHttps) return null
+    const { hostname, domain } = request
 
     const { active, styles, scripts } = blocker.getCosmeticsFilters({
       url,
@@ -233,9 +299,5 @@ export class AdBlock {
     if (!active) return null
     if (!styles && (!scripts || scripts.length === 0)) return null
     return { styles: styles || '', scripts: scripts || [] }
-  }
-
-  isEnabled(session: Session): boolean {
-    return this.active.has(session)
   }
 }
