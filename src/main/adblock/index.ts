@@ -1,19 +1,14 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { adsAndTrackingLists } from '@ghostery/adblocker'
 import { ElectronBlocker } from '@ghostery/adblocker-electron'
 import { app, type Session } from 'electron'
 
 /**
  * Ad and tracker blocking, per Pod session.
  *
- * IT CAN BREAK A SITE, and that is why it is asked for rather than assumed.
- * Measured on YouTube: the video area stays black and the page reports a
- * script declared twice with a stack overflow behind it. Not the request
- * blocking - every endpoint the player needs was checked and none is on a
- * list, including `youtubei/v1/player` and the `googlevideo` stream itself -
- * but the cosmetic side, which injects into the page. So a Pod that plays
- * media is a Pod where this may cost the thing the Pod is for, and it was
- * removed as a default for the music Pod after doing exactly that.
+ * NETWORK filtering only, deliberately: the cosmetic half broke YouTube's
+ * player outright. See `enable` for the measurement behind that.
  *
  * Off by default and opt-in per Pod (`PodSettings.adblock`): most Pods - chat,
  * mail, an intranet - have no ads to block, and every filter engine costs
@@ -39,6 +34,20 @@ import { app, type Session } from 'electron'
  */
 const CACHE_FILE = 'adblock/engine.bin'
 
+/**
+ * How long a cached engine is used before the lists are fetched again.
+ *
+ * The library's caching has no expiry of its own: it reads the file, and only
+ * falls back to downloading when that read FAILS. Left alone, the lists would
+ * be frozen at whatever they were on the first run, for good - no rebuild of
+ * this app would fix it, because nothing in the app carries them.
+ *
+ * So the read reports a stale file as unreadable, which is what sends the
+ * library back to the lists. Three days matches roughly how often uBlock
+ * Origin's own lists move, and the refresh costs one fetch on one launch.
+ */
+const MAX_CACHE_AGE_MS = 3 * 24 * 60 * 60 * 1000
+
 export class AdBlock {
   /** The in-flight or settled build. Kept as the promise, not the value, so
    *  two Pods enabling at once share one build instead of racing two. */
@@ -49,16 +58,55 @@ export class AdBlock {
    *  linked Pods hand over the same object. */
   private readonly active = new Set<Session>()
 
-  private build(): Promise<ElectronBlocker> {
-    const path = join(app.getPath('userData'), CACHE_FILE)
-    return ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, {
-      path,
-      read: (file) => readFile(file),
-      write: async (file, buffer) => {
+  private async build(): Promise<ElectronBlocker> {
+    const caching = {
+      path: join(app.getPath('userData'), CACHE_FILE),
+      read: async (file: string) => {
+        const info = await stat(file)
+        // Rejecting is the only way to ask for a refresh: `fromCached` treats
+        // any failure here as "no cache" and rebuilds from the lists, then
+        // writes the result back through `write` below.
+        if (Date.now() - info.mtimeMs > MAX_CACHE_AGE_MS) {
+          throw new Error('Filter cache is stale; rebuilding from the lists.')
+        }
+        return readFile(file)
+      },
+      write: async (file: string, buffer: Uint8Array) => {
         await mkdir(dirname(file), { recursive: true })
         await writeFile(file, buffer)
       }
-    })
+    }
+
+    /**
+     * uBlock Origin's own lists.
+     *
+     * `adsAndTrackingLists` is uBO's default set - its filters (filters.txt and
+     * the yearly ones, badware, privacy, quick-fixes, resource-abuse, unbreak)
+     * alongside EasyList, EasyPrivacy and Peter Lowe's, which is the same
+     * combination uBO ships enabled. Built from the lists rather than from the
+     * prebuilt engine so the config applies at parse time, and cached on disk
+     * so the parse happens once.
+     *
+     * `loadCosmeticFilters` is TRUE here, and that is the point: the rules that
+     * stop YouTube's ads are cosmetic ones and have to be parsed to exist. What
+     * is switched off, later, is the library's way of INJECTING them.
+     */
+    const blocker = await ElectronBlocker.fromLists(
+      fetch,
+      adsAndTrackingLists,
+      { loadCosmeticFilters: true, loadNetworkFilters: true },
+      caching
+    )
+
+    // uBO's scriptlets are NOT fetched here: `fromLists` already downloads
+    // resources.json and applies it to the engine. Doing it again re-downloaded
+    // 180 kB to be told the checksum had not changed.
+    //
+    // They are what actually blocks the ads. A filter like
+    // `youtube.com##+js(json-prune, playerAds adPlacements)` says which
+    // scriptlet to run and with what arguments; the code for `json-prune` comes
+    // from that file. Lists without it match and then have nothing to execute.
+    return blocker
   }
 
   /**
@@ -85,7 +133,37 @@ export class AdBlock {
     // Checked again after the await: the Pod may have been toggled back off,
     // or another session may have won the race while the engine was building.
     if (this.active.has(session)) return
+
+    /**
+     * Only the NETWORK half is handed to the library, and its cosmetic
+     * injection is switched off by writing the flag `enable()` reads at this
+     * exact moment. The two halves are independent: network filtering
+     * registers its webRequest listeners either way.
+     *
+     * Why, measured: that injection runs a preload in EVERY frame, each asking
+     * main for that frame's filters, and main injects the answer with
+     * `executeJavaScript` - which always targets the MAIN frame. On a page with
+     * thirty frames the main frame therefore receives the payload thirty
+     * times, its identifiers are redeclared, and the page dies of a stack
+     * overflow. On YouTube that meant no player was built at all, and it was
+     * not YouTube refusing an ad blocker: its enforcement dialog was nowhere
+     * on the page.
+     *
+     * Nothing is lost by it. The cosmetic rules are still parsed and still
+     * used - `cosmeticsFor` hands them over, to be injected once, by us.
+     *
+     * A cast because the flag is typed readonly. Only this gate is touched.
+     */
+    const config = blocker.config as { loadCosmeticFilters: boolean }
+    config.loadCosmeticFilters = false
     blocker.enableBlockingInSession(session)
+    // Put BACK, immediately. The flag does double duty: `enable()` reads it
+    // once, synchronously, to decide whether to register its injection - which
+    // is what the line above suppresses - and `getCosmeticsFilters` reads it on
+    // every call to decide whether to answer at all. Left false, the library
+    // stopped injecting AND the engine stopped handing over the rules, so
+    // `cosmeticsFor` returned "not active" and the ads came straight through.
+    config.loadCosmeticFilters = true
     this.active.add(session)
   }
 
@@ -97,6 +175,64 @@ export class AdBlock {
       .catch(() => {
         // The engine never built, so nothing was ever enabled to undo.
       })
+  }
+
+  /**
+   * uBlock Origin's cosmetic rules for one page, ready to be put in it.
+   *
+   * This is the half the library is no longer allowed to inject (see `enable`),
+   * handed over so it can be injected ONCE, into the main frame, at document
+   * start. Document start is not a detail: a scriptlet that prunes ad data out
+   * of a response has to be in place before the page reads that response.
+   *
+   * `scripts` are uBO's scriptlets with their arguments already applied -
+   * this is what stops YouTube's ads, which no network rule can do because
+   * they arrive through the same endpoints as the video. `styles` is the
+   * stylesheet that hides what is left.
+   *
+   * Returns null when there is nothing to do for this page, or when the engine
+   * never built - in which case network filtering is also absent and there is
+   * nothing to report from here.
+   */
+  async cosmeticsFor(url: string): Promise<{ styles: string; scripts: string[] } | null> {
+    if (!this.engine) return null
+    let blocker: ElectronBlocker
+    try {
+      blocker = await this.engine
+    } catch {
+      return null
+    }
+
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return null
+    }
+    // Only pages. An about: or a file: has no rules and no ads.
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+
+    const hostname = parsed.hostname
+    // Registrable domain, close enough for rule lookup: the engine matches on
+    // hostname and uses this for the generic pass.
+    const parts = hostname.split('.')
+    const domain = parts.length > 2 ? parts.slice(-2).join('.') : hostname
+
+    const { active, styles, scripts } = blocker.getCosmeticsFilters({
+      url,
+      hostname,
+      domain,
+      // The rules that matter here: those tied to this hostname, and the
+      // scriptlets. Generic hiding rules need the page's classes and ids,
+      // which are not known before the document exists.
+      getRulesFromHostname: true,
+      getInjectionRules: true,
+      getBaseRules: false,
+      getRulesFromDOM: false
+    })
+    if (!active) return null
+    if (!styles && (!scripts || scripts.length === 0)) return null
+    return { styles: styles || '', scripts: scripts || [] }
   }
 
   isEnabled(session: Session): boolean {

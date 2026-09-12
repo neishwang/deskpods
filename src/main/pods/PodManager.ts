@@ -152,6 +152,36 @@ export function browserUserAgent(): string {
 }
 
 /**
+ * Wraps uBlock Origin's rules for one page into one script.
+ *
+ * Guarded so it runs once per document whichever path delivered it - the
+ * document-start registration and the direct evaluation of the page already
+ * open both use this source, and running the scriptlets twice is the failure
+ * this whole arrangement exists to avoid.
+ *
+ * The stylesheet waits for somewhere to go: at document start there may be no
+ * head yet, and appending to nothing silently loses the rules.
+ */
+function cosmeticSource(rules: { styles: string; scripts: string[] }): string {
+  return `(() => {
+  if (window.__deskpodsCosmetics) return;
+  window.__deskpodsCosmetics = true;
+  ${rules.scripts.map((script) => `try { ${script} } catch (e) {}`).join(' ')}
+  const css = ${JSON.stringify(rules.styles)};
+  if (!css) return;
+  const add = () => {
+    const target = document.head || document.documentElement;
+    if (!target) return false;
+    const tag = document.createElement('style');
+    tag.textContent = css;
+    target.appendChild(tag);
+    return true;
+  };
+  if (!add()) document.addEventListener('DOMContentLoaded', add, { once: true });
+})();`
+}
+
+/**
  * Chromium's own zoom ladder. Ctrl+wheel and Ctrl+`+`/`-` walk these steps, so
  * zooming feels exactly like it does in a browser instead of drifting by an
  * arbitrary delta.
@@ -194,6 +224,10 @@ export class PodManager {
   /** Debugger sessions used for hook installation, and which hooks each one
    *  already carries. Dropped when the debugger detaches. */
   private readonly cdp = new WeakMap<WebContents, Set<string>>()
+  /** The document-start script carrying uBO's rules, and the host it was built
+   *  for, so it is rebuilt when a Pod moves to a different site. */
+  private readonly cosmeticScript = new WeakMap<WebContents, string>()
+  private readonly cosmeticHost = new WeakMap<WebContents, string>()
   private bounds: Rect = { x: 0, y: 0, width: 0, height: 0 }
   /** When true, the active view is hidden so an HTML overlay (dialog) shows. */
   private overlay = false
@@ -250,6 +284,9 @@ export class PodManager {
   /** Set by the IPC layer: a Pod's page navigated, in-page navigation included.
    *  Its history changed, which is what the music Pod's back/forward read. */
   onNavigated?: (id: PodId, url: string) => void
+  /** Set by the IPC layer: uBlock Origin's cosmetic rules for a page this Pod
+   *  is about to show, or null when blocking is off for this Pod. */
+  onCosmetics?: (id: PodId, url: string) => Promise<{ styles: string; scripts: string[] } | null>
   /** Set by the IPC layer: the Pod's page wants to drive a background page. */
   onOpenPage?: (id: PodId, url: string, options?: OpenPageOptions) => Promise<OpenPageResult>
   onRunScript?: (id: PodId, handle: string, code: string) => Promise<ScriptResult>
@@ -386,7 +423,11 @@ export class PodManager {
     // music service routes by pushState and never finishes a "load", so a
     // back/forward button refreshed only on load would sit there greyed out
     // however far you had browsed.
-    wc.on('did-navigate', (_e, url) => this.onNavigated?.(pod.id, url))
+    wc.on('did-navigate', (_e, url) => {
+      this.onNavigated?.(pod.id, url)
+      // Only rebuilds when the host actually changed.
+      void this.armCosmetics(wc, pod.id, url)
+    })
     wc.on('did-navigate-in-page', (_e, url) => this.onNavigated?.(pod.id, url))
 
     // Hook the Notification API on every load, and forward each notification
@@ -668,7 +709,21 @@ export class PodManager {
     // Where the Pod was left, when it is the kind of Pod that remembers (see
     // Pod.lastUrl). Falling back to its own address covers every other Pod and
     // a first launch.
-    void wc.loadURL(pod.lastUrl || pod.url)
+    const opening = pod.lastUrl || pod.url
+    // Loaded on the web contents directly, and NOT through `loadUrl`: that one
+    // finds the view in `this.views`, which this method has not filled in yet.
+    // Going through it here loaded nothing at all.
+    void wc.loadURL(opening).catch(() => {
+      // A failed first load leaves the Pod on its error page, which is what a
+      // browser would show too.
+    })
+    // Not awaited, and the load is not made to wait for it: building the filter
+    // engine means fetching lists the first time, and no Pod should open at the
+    // speed of that. The consequence is accepted - on a cold start the very
+    // first document can be shown before the rules are in, and a scriptlet that
+    // arrives after the page has read its data has arrived too late. Every
+    // document after it, and every warm start, is covered.
+    void this.armCosmetics(wc, pod.id, opening)
     this.views.set(pod.id, view)
     return view
   }
@@ -1106,6 +1161,63 @@ export class PodManager {
     } catch (error) {
       if (!app.isPackaged) console.log('[cdp] install', key, 'failed:', String(error).slice(0, 160))
       return false
+    }
+  }
+
+  /**
+   * Put uBlock Origin's cosmetic rules into this Pod, at document start.
+   *
+   * Injected ONCE, into the main frame, which is the whole difference from the
+   * way the library does it (see the ad blocker's `enable`). Document start
+   * matters just as much: a scriptlet that prunes ad data out of a response is
+   * useless once the page has read that response, which is why the ads this is
+   * for cannot be stopped any later.
+   *
+   * Rebuilt when the HOST changes, not on every navigation: rules are keyed by
+   * hostname, and a music service moves between pages of one site constantly.
+   */
+  private async armCosmetics(wc: WebContents, id: PodId, url: string): Promise<void> {
+    if (!this.onCosmetics) return
+    let host: string
+    try {
+      host = new URL(url).host
+    } catch {
+      return
+    }
+    if (!host || this.cosmeticHost.get(wc) === host) return
+
+    const rules = await this.onCosmetics(id, url)
+    if (wc.isDestroyed()) return
+    const installed = await this.cdpFor(wc)
+    if (!installed || wc.isDestroyed()) return
+
+    // The previous site's rules are removed rather than stacked - that stacking
+    // is exactly what broke pages before.
+    const previous = this.cosmeticScript.get(wc)
+    try {
+      if (previous) {
+        await wc.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', {
+          identifier: previous
+        })
+        this.cosmeticScript.delete(wc)
+      }
+    } catch {
+      // Debugger gone; nothing to remove and nothing to add below either.
+    }
+    this.cosmeticHost.set(wc, host)
+    if (!rules) return
+
+    const source = cosmeticSource(rules)
+    try {
+      const added = (await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
+        source
+      })) as { identifier?: string }
+      if (added?.identifier) this.cosmeticScript.set(wc, added.identifier)
+      // The document already here gets it too, since the script above only
+      // applies to documents created from now on.
+      await wc.debugger.sendCommand('Runtime.evaluate', { expression: source })
+    } catch {
+      // No debugger: the Pod keeps network filtering and loses the rest.
     }
   }
 

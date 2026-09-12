@@ -923,6 +923,19 @@ export function registerIpc(
     if (!isLoading && id === state.musicPodId) pushMusicNav()
   }
 
+  /**
+   * uBlock Origin's cosmetic rules for a page a Pod is about to show.
+   *
+   * Answered only for a Pod that asked for blocking, and only because the
+   * library's own injection cannot be used (see AdBlock.enable). PodManager
+   * puts these in at document start, once, in the main frame.
+   */
+  pods.onCosmetics = async (id, url) => {
+    const pod = state.pods.find((p) => p.id === id)
+    if (pod?.settings?.adblock !== true) return null
+    return adblock.cosmeticsFor(url)
+  }
+
   pods.onNavigated = (id, url) => {
     if (id !== state.musicPodId) return
     pushMusicNav()
