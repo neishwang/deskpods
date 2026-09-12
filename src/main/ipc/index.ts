@@ -1018,7 +1018,7 @@ export function registerIpc(
     }
   }
   // Toasts are clickable; everything else in the overlay stays click-through.
-  const setHitAreas = overlay ? createHitAreaTracker(overlay) : () => {}
+  const setHitAreas = overlay ? createHitAreaTracker(overlay, window) : () => {}
   ipcMain.on(IpcChannels.overlayHitAreas, (event, areas: Rect[]) => {
     if (event.sender === overlay?.webContents) setHitAreas(areas)
   })

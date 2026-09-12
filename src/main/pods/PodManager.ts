@@ -224,8 +224,11 @@ export class PodManager {
   /** Which Pod the mini player drives; only that one gets the media hook. */
   private musicPodId: PodId | null = null
   /** Debugger sessions used for hook installation, and which hooks each one
-   *  already carries. Dropped when the debugger detaches. */
-  private readonly cdp = new WeakMap<WebContents, Set<string>>()
+   *  already carries. Kept as the in-flight promise, not the resolved set, so
+   *  that installHooks (dom-ready) and armCosmetics (did-navigate) racing for
+   *  the same WebContents attach the debugger once and share it rather than
+   *  one clobbering the other's Set. Dropped when the debugger detaches. */
+  private readonly cdp = new WeakMap<WebContents, Promise<Set<string> | null>>()
   /** The document-start script carrying uBO's rules, and the host it was built
    *  for, so it is rebuilt when a Pod moves to a different site. */
   private readonly cosmeticScript = new WeakMap<WebContents, string>()
@@ -1027,6 +1030,15 @@ export class PodManager {
   }
 
   updateBounds(bounds: Rect): void {
+    // The renderer drives this from both a ResizeObserver and a window
+    // `resize` listener on the same rectangle, so one resize frame invokes
+    // here at least twice. Without this guard each call redoes setBounds,
+    // syncActiveVisibility, and the music nav's JSON.stringify for a
+    // rectangle that hasn't actually changed.
+    const { x, y, width, height } = this.bounds
+    if (x === bounds.x && y === bounds.y && width === bounds.width && height === bounds.height) {
+      return
+    }
     this.bounds = bounds
     if (this.activeId) {
       this.views.get(this.activeId)?.setBounds(bounds)
@@ -1118,17 +1130,27 @@ export class PodManager {
   private async cdpFor(wc: WebContents): Promise<Set<string> | null> {
     const existing = this.cdp.get(wc)
     if (existing) return existing
-    try {
-      if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
-      // Page has to be enabled before a document-start script is accepted.
-      await wc.debugger.sendCommand('Page.enable')
-    } catch {
-      return null
-    }
-    const installed = new Set<string>()
-    this.cdp.set(wc, installed)
-    wc.debugger.once('detach', () => this.cdp.delete(wc))
-    return installed
+    // Cached and returned before the attach/enable below resolves, so a second
+    // caller arriving while this is in flight awaits the same promise instead
+    // of racing its own attach and installing a Set the first caller can never
+    // see (installHooks and armCosmetics both reach here from separate events).
+    const attaching = (async () => {
+      // Yield once before touching the debugger, so the cache below is
+      // populated before a synchronous attach failure could try to clear it.
+      await null
+      try {
+        if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
+        // Page has to be enabled before a document-start script is accepted.
+        await wc.debugger.sendCommand('Page.enable')
+      } catch {
+        this.cdp.delete(wc)
+        return null
+      }
+      wc.debugger.once('detach', () => this.cdp.delete(wc))
+      return new Set<string>()
+    })()
+    this.cdp.set(wc, attaching)
+    return attaching
   }
 
   /**
@@ -1201,12 +1223,32 @@ export class PodManager {
     } catch {
       return
     }
-    if (!host || this.cosmeticHost.get(wc) === host) return
+    const previousHost = this.cosmeticHost.get(wc)
+    if (!host || previousHost === host) return
+    // Claimed before onCosmetics/cdpFor, both of which can take seconds on a
+    // cold engine build: ensureView fires this on load and did-navigate fires
+    // it again for the same URL, and without an early claim both calls read
+    // the old host, both pass the guard, and both end up registering a script
+    // - leaving a second one alive forever since only one identifier is kept.
+    // Restored on an early return so a genuine retry (destroyed contents, no
+    // debugger, no rules) is still possible.
+    this.cosmeticHost.set(wc, host)
+
+    const restoreHost = (): void => {
+      if (previousHost === undefined) this.cosmeticHost.delete(wc)
+      else this.cosmeticHost.set(wc, previousHost)
+    }
 
     const rules = await this.onCosmetics(id, url)
-    if (wc.isDestroyed()) return
+    if (wc.isDestroyed()) {
+      restoreHost()
+      return
+    }
     const installed = await this.cdpFor(wc)
-    if (!installed || wc.isDestroyed()) return
+    if (!installed || wc.isDestroyed()) {
+      restoreHost()
+      return
+    }
 
     // The previous site's rules are removed rather than stacked - that stacking
     // is exactly what broke pages before.
@@ -1221,7 +1263,6 @@ export class PodManager {
     } catch {
       // Debugger gone; nothing to remove and nothing to add below either.
     }
-    this.cosmeticHost.set(wc, host)
     if (!rules) return
 
     const source = cosmeticSource(rules)

@@ -83,19 +83,26 @@ export function createOverlayWindow(parent: BrowserWindow): BrowserWindow | null
  * the pointer sits inside one, so everything else still passes straight to the
  * Pod underneath. Sampling rather than `setIgnoreMouseEvents(true, { forward:
  * true })` on purpose - forwarding move events is what made the cursor flicker
- * on Windows. The timer only runs while a region is reported, and never while
- * idle - but "a few seconds per notification" no longer describes all of it:
- * the music Pod's history square is reported for as long as that Pod is the one
- * on screen, so browsing a music service samples the cursor for as long as you
- * are looking at it. Withdrawn the moment another Pod is shown.
+ * on Windows. The music Pod's history square reports a region for as long as
+ * that Pod is on screen, which can be hours, so the timer also tracks the main
+ * window's focus (the overlay itself is `focusable: false`, so its own focus
+ * state is meaningless here): losing focus stops sampling and drops the
+ * overlay back to click-through, since the cursor can't be aiming at the
+ * region if DeskPods isn't the foreground app, and regaining it resumes
+ * sampling - immediately once, then on the interval - only if a region is
+ * still reported.
  *
  * Returns the setter to call with the reported regions.
  */
-export function createHitAreaTracker(overlay: BrowserWindow): (areas: Rect[]) => void {
-  const SAMPLE_MS = 50
+export function createHitAreaTracker(
+  overlay: BrowserWindow,
+  window: BrowserWindow
+): (areas: Rect[]) => void {
+  const SAMPLE_MS = 100
   let timer: NodeJS.Timeout | null = null
   let areas: Rect[] = []
   let clickable = false
+  let focused = !window.isDestroyed() && window.isFocused()
 
   const setClickable = (next: boolean) => {
     if (next === clickable || overlay.isDestroyed()) return
@@ -103,11 +110,15 @@ export function createHitAreaTracker(overlay: BrowserWindow): (areas: Rect[]) =>
     overlay.setIgnoreMouseEvents(!next)
   }
 
-  const stop = () => {
+  const stopTimer = () => {
     if (timer) {
       clearInterval(timer)
       timer = null
     }
+  }
+
+  const stop = () => {
+    stopTimer()
     setClickable(false)
   }
 
@@ -123,9 +134,21 @@ export function createHitAreaTracker(overlay: BrowserWindow): (areas: Rect[]) =>
     setClickable(isInsideAreas(areas, x, y))
   }
 
+  window.on('focus', () => {
+    focused = true
+    if (areas.length === 0) return
+    if (!timer) timer = setInterval(sample, SAMPLE_MS)
+    sample()
+  })
+
+  window.on('blur', () => {
+    focused = false
+    stop()
+  })
+
   return (next: Rect[]) => {
     areas = Array.isArray(next) ? next : []
-    if (areas.length === 0) {
+    if (areas.length === 0 || !focused) {
       stop()
       return
     }
