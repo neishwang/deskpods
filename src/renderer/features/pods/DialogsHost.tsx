@@ -6,6 +6,7 @@ import { DownloadPermissionDialog } from './DownloadPermissionDialog'
 import { ExecPermissionDialog } from './ExecPermissionDialog'
 import { FolderSettingsDialog } from './FolderSettingsDialog'
 import { GitPermissionDialog } from './GitPermissionDialog'
+import { MusicPodDialog } from './MusicPodDialog'
 import { PromptDialog } from './PromptDialog'
 import { ScriptingPermissionDialog } from './ScriptingPermissionDialog'
 import { normalizeUrl } from './url'
@@ -64,10 +65,12 @@ export function DialogsHost(): React.JSX.Element | null {
   // Two dialogs of the same kind can follow each other out of the queue (two
   // Pods asking for git, say). Without a key React would REUSE the component,
   // and a permission dialog that has already answered once refuses to answer
-  // again — the second page would wait forever. The key forces a fresh one.
-  const key = `${dialog.type}:${'id' in dialog ? dialog.id : (dialog.folderId ?? 'root')}`
+  // again - the second page would wait forever. The key forces a fresh one.
+  const key = `${dialog.type}:${'id' in dialog ? dialog.id : 'folderId' in dialog ? (dialog.folderId ?? 'root') : 'root'}`
 
   switch (dialog.type) {
+    case 'music-pod':
+      return <MusicPodDialog key={key} />
     case 'add-pod':
       return <AddPodDialog key={key} folderId={dialog.folderId} />
     case 'rename-pod':

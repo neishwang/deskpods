@@ -23,6 +23,9 @@ export function useCommands(): (command: UiCommand) => void {
       case 'edit-pod-url':
         store.setDialog({ type: 'edit-pod-url', id: command.id })
         break
+      case 'music-pod':
+        store.setDialog({ type: 'music-pod' })
+        break
       case 'folder-settings':
         store.setDialog({ type: 'folder-settings', id: command.id })
         break

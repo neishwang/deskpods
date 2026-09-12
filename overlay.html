@@ -163,11 +163,292 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
+
+      /* Media drawer: the fuller transport for the music Pod.
+
+         It lives in this window rather than in the sidebar because it extends
+         over the workspace, where a Pod's native view paints over anything the
+         chrome renderer drew.
+
+         A fixed strip on the bottom edge, opened in two beats: the box widens,
+         and only once it has finished does its content fade in. Closing runs
+         the same beats backwards. Doing both at once is what made it read as a
+         card appearing rather than a drawer sliding out.
+
+         Its size comes from script (one source of truth with the rectangle
+         reported to main for hit testing); only the collapsed state and the
+         transitions live here. */
+      #media-drawer {
+        position: fixed;
+        left: 0;
+        /* Placed entirely from script, in the chrome's viewport coordinates -
+           this window covers exactly that content area (see
+           MediaPanelPayload). */
+        top: 0;
+        width: 0;
+        overflow: hidden;
+        /* Collapsed it is hidden outright, not merely zero-width: borders are
+           drawn outside the content box, so a zero-width element still shows a
+           sliver of itself beside the rail. */
+        visibility: hidden;
+        box-sizing: border-box;
+        /* #334155 is the chrome's --color-border: this line is meant to read
+           as the same rule that separates the music Pod's slot in the rail. */
+        border-top: 1px solid #334155;
+        border-right: 1px solid #334155;
+        background: #1e293b;
+        color: #f8fafc;
+        pointer-events: none;
+        /* Durations come from script, so the CSS and the timers that sequence
+           the two beats cannot drift apart. */
+        transition:
+          width var(--slide, 75ms) cubic-bezier(0.22, 0.61, 0.36, 1),
+          visibility 0s linear var(--slide, 75ms);
+      }
+
+      #media-drawer.open {
+        visibility: visible;
+        /* Clickable: main only lets mouse events through while the cursor is
+           actually inside the rectangle this reports. */
+        pointer-events: auto;
+        transition:
+          width var(--slide, 75ms) cubic-bezier(0.22, 0.61, 0.36, 1),
+          visibility 0s;
+      }
+
+      #media-drawer .inner {
+        height: 100%;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 6px;
+        opacity: 0;
+        transition: opacity var(--fade, 75ms) ease;
+      }
+
+      #media-drawer.shown .inner {
+        opacity: 1;
+      }
+
+      #media-drawer .top {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      #media-drawer .transport {
+        display: flex;
+        align-items: center;
+        gap: 1px;
+        flex: none;
+      }
+
+      /* The track, between the transport and the volume. `min-width: 0` is what
+         lets it actually shrink inside the flex row instead of pushing the
+         volume off the end - and it is what gives the marquee a real width to
+         measure against. */
+      #media-drawer .track {
+        flex: 1;
+        min-width: 0;
+      }
+
+      #media-drawer .title {
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1.25;
+      }
+
+      #media-drawer .artist {
+        font-size: 11px;
+        line-height: 1.25;
+        color: #94a3b8;
+      }
+
+      /* Marquee: a line too long for the strip scrolls, and only then. The
+         shift is the exact overflow, set from script - a percentage would
+         scroll a slightly long title needlessly and a very long one not far
+         enough. */
+      .scroller {
+        overflow: hidden;
+        white-space: nowrap;
+      }
+
+      .scroller > span {
+        display: inline-block;
+        white-space: nowrap;
+      }
+
+      .scroller.overflowing > span {
+        animation: marquee var(--marquee-duration, 8s) linear infinite;
+      }
+
+      @keyframes marquee {
+        0%,
+        14% {
+          transform: translateX(0);
+        }
+        86%,
+        100% {
+          transform: translateX(var(--marquee-shift, 0px));
+        }
+      }
+
+      #media-drawer .bottom {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+        color: #94a3b8;
+      }
+
+      #media-drawer .bottom .seek {
+        flex: 1;
+      }
+
+      #media-drawer button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: #cbd5e1;
+        cursor: pointer;
+      }
+
+      #media-drawer button.primary {
+        width: 25px;
+        height: 25px;
+        background: #2563eb;
+        color: #ffffff;
+      }
+
+      #media-drawer button:hover:not(:disabled) {
+        background: #334155;
+        color: #ffffff;
+      }
+
+      #media-drawer button.primary:hover:not(:disabled) {
+        background: #1d4ed8;
+      }
+
+      #media-drawer button:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+
+      #media-drawer button.primary:disabled {
+        background: #334155;
+        opacity: 0.6;
+      }
+
+      #media-drawer button.on {
+        color: #f87171;
+      }
+
+      /* Seek and volume. Native range inputs, restyled: a hand-rolled slider
+         would have to reimplement the drag and keyboard behaviour these already
+         have. The played portion is painted with a gradient whose stop is moved
+         from script - the only way to fill one side of a range input without a
+         second element tracking it. */
+      #media-drawer input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        height: 4px;
+        margin: 0;
+        border-radius: 2px;
+        background: #334155;
+        cursor: pointer;
+      }
+
+      #media-drawer input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #f8fafc;
+      }
+
+      #media-drawer input[type="range"]:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+
+      #media-drawer input[type="range"]:disabled::-webkit-slider-thumb {
+        opacity: 0;
+      }
+
+      #media-drawer .volume {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex: none;
+      }
+
+      /* Narrow on purpose: on a 260px strip every pixel the volume takes is a
+         pixel the track title does not get, and the title is the thing you
+         actually read. */
+      #media-drawer .volume input[type="range"] {
+        width: 42px;
+      }
+
+      /* The music Pod's history square, inside its own content area. */
+      #music-nav {
+        position: fixed;
+        left: 0;
+        top: 0;
+        display: none;
+        gap: 2px;
+        padding: 3px;
+        border-radius: 6px;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        background: rgba(15, 23, 42, 0.82);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+        pointer-events: auto;
+      }
+
+      #music-nav.visible {
+        display: flex;
+      }
+
+      #music-nav button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: #e2e8f0;
+        cursor: pointer;
+      }
+
+      #music-nav button:hover:not(:disabled) {
+        background: rgba(148, 163, 184, 0.22);
+      }
+
+      #music-nav button:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+
     </style>
   </head>
   <body>
     <div id="tooltip"></div>
     <div id="zoom"></div>
+    <div id="media-drawer"></div>
+    <div id="music-nav"></div>
     <div id="toasts"></div>
     <script type="module" src="/src/overlay/index.ts"></script>
   </body>

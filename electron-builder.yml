@@ -6,10 +6,14 @@ directories:
 files:
   - out/**/*
   - package.json
+  # The ad blocker resolves its own content preload out of node_modules at
+  # runtime (require.resolve), so the package has to travel with the app -
+  # bundling main is not enough to bring that file along.
+  - node_modules/@ghostery/**/*
 win:
   icon: build/icon.ico
   target:
-    # A self-contained folder (fast start): unzip anywhere — e.g. M:\ — run
+    # A self-contained folder (fast start): unzip anywhere - e.g. M:\ - run
     # DeskPods.exe, and all data lives in a `data/` folder right next to it.
     - target: zip
     # A single portable .exe: put it anywhere and its data folder appears beside

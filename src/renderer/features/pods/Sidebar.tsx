@@ -18,12 +18,14 @@ import type { Folder, FolderId, Pod, PodId } from '@types'
 import { Folder as FolderIcon, Plus } from 'lucide-react'
 import { createContext, useContext, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
+import { MiniPlayer } from './MiniPlayer'
 import {
   folderKey,
   rootEntriesFrom,
   selectFolderPods,
   selectFolders,
   selectRootPods,
+  selectVisiblePods,
   usePodStore
 } from './usePodStore'
 
@@ -32,7 +34,7 @@ type Container = typeof ROOT | FolderId
 
 /**
  * Every icon (root Pod, folder icon, folder Pod) is a point on one vertical
- * axis. The icon whose row is nearest the pointer wins — deterministic and
+ * axis. The icon whose row is nearest the pointer wins - deterministic and
  * gap-proof (no tall container ever "swallows" the drop). `resolve()` then uses
  * the pointer's position *inside that icon* to pick top / centre / bottom.
  *
@@ -103,7 +105,7 @@ const hideTip = (): void => {
 }
 
 // Returns a ReactNode rather than an element: with no favicon the icon IS a
-// bare letter, drawn by the parent's own centring — wrapping it in anything
+// bare letter, drawn by the parent's own centring - wrapping it in anything
 // would change how it sits.
 function PodIcon({ pod }: { pod: Pod }): React.ReactNode {
   return pod.icon ? <img src={pod.icon} alt="" className="h-6 w-6 rounded" /> : initial(pod.name)
@@ -454,7 +456,7 @@ function applyResolution(res: Resolution): void {
       return
     }
     case 'root-line': {
-      const entries = rootEntriesFrom(store.pods, store.folders).filter(
+      const entries = rootEntriesFrom(selectVisiblePods(store), store.folders).filter(
         (e) => !(e.kind === res.activeKind && e.id === res.activeId)
       )
       let idx = entries.findIndex((e) => e.key === res.anchorKey)
@@ -593,6 +595,10 @@ export function Sidebar(): React.JSX.Element {
           ) : null}
         </DragOverlay>
       </DndContext>
+
+      {/* Its own slot at the foot of the rail, outside the drag context: the
+          music Pod is not part of the list above and is not reordered with it. */}
+      <MiniPlayer />
     </nav>
   )
 }

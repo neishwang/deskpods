@@ -8,6 +8,10 @@ import {
   type FolderPatch,
   type FolderPlacement,
   IpcChannels,
+  type MediaCommand,
+  type MediaInfo,
+  type MediaPanelPayload,
+  type MusicNavPayload,
   type OverlayToast,
   type Pod,
   type PodId,
@@ -65,6 +69,22 @@ const api: DeskPodsApi = {
     return () => ipcRenderer.removeListener(IpcChannels.tooltip, handler)
   },
   overlayIdle: () => ipcRenderer.send(IpcChannels.overlayIdle),
+  showMediaPanel: (anchor: { x: number; top: number; height: number } | null) =>
+    ipcRenderer.invoke(IpcChannels.showMediaPanel, anchor),
+  onMediaPanel: (listener: (payload: MediaPanelPayload | null) => void) => {
+    const handler = (_e: IpcRendererEvent, payload: MediaPanelPayload | null) => listener(payload)
+    ipcRenderer.on(IpcChannels.mediaPanel, handler)
+    return () => ipcRenderer.removeListener(IpcChannels.mediaPanel, handler)
+  },
+  onMusicNav: (listener: (payload: MusicNavPayload | null) => void) => {
+    const handler = (_e: IpcRendererEvent, payload: MusicNavPayload | null) => listener(payload)
+    ipcRenderer.on(IpcChannels.musicNav, handler)
+    return () => ipcRenderer.removeListener(IpcChannels.musicNav, handler)
+  },
+  sendOverlayMediaCommand: (command: MediaCommand, value?: number) =>
+    ipcRenderer.send(IpcChannels.overlayMediaCommand, command, value),
+  reportMediaPanelHover: (hovering: boolean) =>
+    ipcRenderer.send(IpcChannels.mediaPanelHover, hovering),
   reportHitAreas: (areas: Rect[]) => ipcRenderer.send(IpcChannels.overlayHitAreas, areas),
   onToast: (listener: (toast: OverlayToast) => void) => {
     const handler = (_e: IpcRendererEvent, toast: OverlayToast) => listener(toast)
@@ -85,6 +105,17 @@ const api: DeskPodsApi = {
     const handler = (_e: IpcRendererEvent, command: UiCommand) => listener(command)
     ipcRenderer.on(IpcChannels.uiCommand, handler)
     return () => ipcRenderer.removeListener(IpcChannels.uiCommand, handler)
+  },
+  setMusicPod: (id: PodId | null, options?: { enableAdblock?: boolean }) =>
+    ipcRenderer.invoke(IpcChannels.setMusicPod, id, options),
+  setMusicService: (url: string, name?: string) =>
+    ipcRenderer.invoke(IpcChannels.setMusicService, url, name),
+  sendMediaCommand: (command: MediaCommand, value?: number) =>
+    ipcRenderer.invoke(IpcChannels.mediaCommand, command, value),
+  onMediaState: (listener: (info: MediaInfo | null) => void) => {
+    const handler = (_e: IpcRendererEvent, info: MediaInfo | null) => listener(info)
+    ipcRenderer.on(IpcChannels.mediaState, handler)
+    return () => ipcRenderer.removeListener(IpcChannels.mediaState, handler)
   },
   onStateChanged: (listener: (state: AppState) => void) => {
     const handler = (_e: IpcRendererEvent, state: AppState) => listener(state)

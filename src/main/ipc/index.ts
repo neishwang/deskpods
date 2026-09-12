@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { AdBlock } from '@main/adblock'
 import { PodDownloads } from '@main/downloads'
 import { listDirectory, readFileAt, writeFileAt } from '@main/files'
 import { isValidArgs, resolveInside, runGit } from '@main/git'
@@ -32,6 +33,11 @@ import {
   IpcChannels,
   type ListDirRequest,
   type ListDirResult,
+  type MediaAction,
+  type MediaCommand,
+  type MediaInfo,
+  type MediaReport,
+  MUSIC_SITES,
   type OpenPageOptions,
   type OpenPageResult,
   type OverlayToast,
@@ -59,6 +65,10 @@ import {
   Menu,
   type MenuItemConstructorOptions
 } from 'electron'
+
+/** How many hand-typed music services are kept (see AppState.musicUrls). A
+ *  shortcut, not a history: enough to cover the ones actually reused. */
+const MAX_REMEMBERED_MUSIC_URLS = 5
 
 /** Preset folder colours offered in the native context menu. */
 const FOLDER_COLORS = [
@@ -103,6 +113,7 @@ export function registerIpc(
   state: AppState
 ): AppState {
   pods.setPods(state.pods)
+  pods.setMusicPod(state.musicPodId ?? null)
 
   // Pods whose name was auto-derived and may still be replaced by the first
   // page title. Cleared once the title is applied so the sidebar name stops
@@ -120,8 +131,8 @@ export function registerIpc(
   /**
    * These channels answer the DeskPods chrome and its overlay, nobody else.
    *
-   * A Pod's page cannot reach them today — it is sandboxed and context-isolated,
-   * and its preload exposes `__deskpods` and nothing more — so this is the belt
+   * A Pod's page cannot reach them today - it is sandboxed and context-isolated,
+   * and its preload exposes `__deskpods` and nothing more - so this is the belt
    * that keeps it true if a preload ever grows. Everything a Pod IS allowed to
    * ask for goes through `wc.ipc` on its own web contents, which carries the
    * Pod it came from.
@@ -146,7 +157,7 @@ export function registerIpc(
   // actually read it). A Notification raised by an app that doesn't put a count
   // in its title contributes 1 until you view that Pod (its only "read" signal).
   //
-  // Everything is EVENT-driven — `page-title-updated` (via onMeta), captured
+  // Everything is EVENT-driven - `page-title-updated` (via onMeta), captured
   // notifications, Pod activation and window focus. No polling: an idle
   // DeskPods schedules zero wakeups in main.
   const lastTitle = new Map<PodId, string>()
@@ -164,9 +175,17 @@ export function registerIpc(
   const stateForRenderer = (): AppState => ({ ...state, pods: state.pods.map(withRuntime) })
   const pushPod = (pod: Pod) => send(IpcChannels.podUpdated, withRuntime(pod))
 
+  /** Whether the music Pod is playing, for the taskbar overlay. Kept here, in
+   *  its own flag, rather than read off the media state below: `refreshUnread`
+   *  is defined before that state exists and would be reaching into a binding
+   *  that is not initialised yet. */
+  let musicPlaying = false
+  let musicMuted = false
+
   /** Re-derive every Pod's unread count in one pass; push the ones that changed
    *  and update the taskbar badge: a NUMBER when titles carry real counts, a
-   *  plain dot when unread comes only from caught notifications. */
+   *  plain dot when unread comes only from caught notifications, and failing
+   *  both, a speaker while the music Pod is playing. */
   const refreshUnread = (forceBadge = false) => {
     let dirty = false
     let titleTotal = 0
@@ -184,7 +203,7 @@ export function registerIpc(
       }
     }
     if (dirty || forceBadge) {
-      setTaskbarBadge(window, titleTotal, anyUnread && titleTotal === 0)
+      setTaskbarBadge(window, titleTotal, anyUnread && titleTotal === 0, musicPlaying, musicMuted)
     }
   }
 
@@ -214,6 +233,12 @@ export function registerIpc(
     downloads.forget(id)
     state.pods = state.pods.filter((p) => p.id !== id)
     if (state.activePodId === id) state.activePodId = state.pods[0]?.id ?? null
+    if (state.musicPodId === id) {
+      state.musicPodId = null
+      report = null
+      pods.setMusicPod(null)
+      pushMedia()
+    }
     pods.destroy(id)
     lastTitle.delete(id)
     notified.delete(id)
@@ -417,7 +442,7 @@ export function registerIpc(
     return runCommand(request.command, prepared.cwd, request.timeout, request.stdin)
   }
 
-  // Commands that outlive a single answer — an agent session, a long build.
+  // Commands that outlive a single answer - an agent session, a long build.
   // Same permission, same folder, same allow-list; only the shape differs.
   const commands = new RunningCommands()
 
@@ -458,7 +483,7 @@ export function registerIpc(
   })
 
   // ...and it must actually close. A background page is a hidden BrowserWindow,
-  // and `window-all-closed` waits for every window there is — so one a Pod
+  // and `window-all-closed` waits for every window there is - so one a Pod
   // forgot to close would keep the whole app alive, invisible, until its idle
   // timer expired minutes later.
   window.on('closed', () => {
@@ -470,7 +495,7 @@ export function registerIpc(
   // --- downloads --------------------------------------------------------
   // A Pod's page can download a file with the Pod's OWN session, which is the
   // whole point: the session it is already logged in with. Its own permission,
-  // asked once per Pod like scripting — the user still answers a Save dialog for
+  // asked once per Pod like scripting - the user still answers a Save dialog for
   // every single file, so what is being granted is "download with my session",
   // not "write where you like".
   const downloads = new PodDownloads()
@@ -512,10 +537,222 @@ export function registerIpc(
     return askDownload(id, url)
   }
 
+  // --- ad blocking ------------------------------------------------------
+  // Opt-in per Pod, and enabled on the SESSION - so linked Pods share it, like
+  // they share cookies. The engine builds on the first Pod that asks; a Pod
+  // that never turns it on costs nothing.
+  const adblock = new AdBlock()
+
+  // --- the music Pod and its mini player --------------------------------
+  // What it is playing is RUNTIME state, like unread: derived from the page,
+  // never persisted. Only the role itself (`state.musicPodId`) is remembered.
+  let report: MediaReport | null = null
+  let media: MediaInfo | null = null
+
+  /**
+   * What the page last reported, for a Pod that has never been loaded and so
+   * has never reported anything. The player still has to draw - showing an
+   * empty strip is the honest answer, and refusing to draw at all is why the
+   * drawer used to stay away until the Pod had been clicked once.
+   */
+  const NOTHING_PLAYING: MediaReport = {
+    title: '',
+    artist: '',
+    album: '',
+    artwork: '',
+    playing: false,
+    canNext: false,
+    canPrevious: false,
+    canSeek: false,
+    canVolume: false,
+    position: 0,
+    duration: 0,
+    volume: 1
+  }
+
+  /** The page's last report plus the parts main owns (mute, history). Recomposed
+   *  rather than cached: a Back press changes the arrows without the page
+   *  saying anything at all. */
+  const composeMedia = (): MediaInfo | null => {
+    const id = state.musicPodId
+    if (!id) return null
+    return { ...(report ?? NOTHING_PLAYING), ...pods.transportOf(id) }
+  }
+
+  /** The sidebar shows no clock, so the position must not reach it: a value
+   *  that ticks every second would re-render the rail once a second forever.
+   *  The drawer, which does show it, is refreshed unconditionally below. */
+  const withoutTime = (info: MediaInfo | null) =>
+    info ? JSON.stringify({ ...info, position: 0, duration: 0, volume: 0 }) : 'null'
+
+  const pushMedia = () => {
+    const next = composeMedia()
+    if (withoutTime(next) !== withoutTime(media)) send(IpcChannels.mediaState, next)
+    media = next
+    pushMusicNav()
+    // The taskbar overlay says "this app is the one making the sound", or that
+    // it would be and has been silenced - but only when there is no unread
+    // badge to show, since Windows has a single slot for both (see
+    // setTaskbarBadge). Muting no longer just removes the overlay: the reason
+    // you hear nothing is worth more than the absence of a badge.
+    const playing = next?.playing === true
+    const muted = next?.muted === true
+    if (playing !== musicPlaying || muted !== musicMuted) {
+      musicPlaying = playing
+      musicMuted = muted
+      refreshUnread(true)
+    }
+    // The drawer, when up, is showing the same thing and must not go stale.
+    if (panelAnchor) sendMediaPanel(panelAnchor)
+  }
+
+  pods.onMedia = (_id, info) => {
+    report = info
+    pushMedia()
+  }
+
+  const setMusicPod = (id: PodId | null, enableAdblock = false) => {
+    const next = id && state.pods.some((p) => p.id === id) ? id : null
+    if ((state.musicPodId ?? null) === next) return
+    state.musicPodId = next
+    report = null
+    // Only ever on the way in, and only when the caller asked: a music service
+    // is the one Pod we know in advance will show ads. It stays an ordinary
+    // per-Pod setting afterwards, so the Pod's own menu can turn it back off.
+    if (next && enableAdblock) {
+      const pod = state.pods.find((p) => p.id === next)
+      if (pod) pod.settings = { ...pod.settings, adblock: true }
+    }
+    // Whatever the old Pod was playing is no longer what the player drives.
+    pushMedia()
+    pods.setMusicPod(next)
+    pushState()
+  }
+
+  /**
+   * Route one command. The transport three are replayed into the page through
+   * its media-session handlers; mute and history are answered here, on the web
+   * contents, and so work whatever the site does.
+   *
+   * Nothing is queued for a Pod with no live view: the user loads it by
+   * clicking it, which is the whole point of not loading it at startup.
+   */
+  const runMediaCommand = (action: MediaAction) => {
+    const id = state.musicPodId
+    if (!id || !action?.command) return
+    const { command } = action
+    if (command === 'togglemute') pods.toggleMuted(id)
+    else if (command === 'back' || command === 'forward') pods.navigatePod(id, command)
+    else pods.send(id, IpcChannels.podMediaCommand, action)
+    // Mute and history change nothing the page will report, so the player is
+    // refreshed here or its buttons would lie until the next poll.
+    pushMedia()
+  }
+
+  // --- the media panel, drawn in the overlay window ----------------------
+  // It has to live there: it extends over the workspace, and anything the
+  // renderer draws there is painted over by the Pod's native view.
+  const PANEL_GRACE_MS = 220
+  let panelAnchor: { x: number; top: number; height: number } | null = null
+  let panelHideTimer: NodeJS.Timeout | undefined
+
+  /**
+   * Windows plays its own show animation when a window appears, and the overlay
+   * is hidden whenever it has nothing to draw. Sending the drawer in the same
+   * breath as showing the window meant the CSS slide finished while the WINDOW
+   * was still fading in - so the drawer arrived already at full width, drifting
+   * into place. That is why it looked right on the music Pod, where the window
+   * was already up for the history square, and wrong everywhere else.
+   *
+   * So: put the window up first (it is empty and transparent, so nothing is
+   * seen), let that animation finish, and only then hand it something to draw.
+   */
+  const OS_WINDOW_SHOW_MS = 220
+  /** When the overlay window last went from hidden to visible - by ANY route. */
+  let overlayShownAt = 0
+
+  const whenOverlayShown = (then: () => void) => {
+    if (!overlay || overlay.isDestroyed()) return
+    showOverlay()
+    // Waiting only when this call did the showing was not enough: a toast, a
+    // tooltip, the zoom pill or the history square may have put the window up
+    // a few milliseconds earlier, in which case it already reads as visible
+    // while the OS is still animating it in - and the drawer's own slide,
+    // starting underneath that, finishes before anyone sees it. Hence the
+    // timestamp: whoever raised the window, wait out what is left of it. This
+    // is the rare "it faded in from the corner" case.
+    const elapsed = Date.now() - overlayShownAt
+    if (elapsed >= OS_WINDOW_SHOW_MS) then()
+    else setTimeout(then, OS_WINDOW_SHOW_MS - elapsed)
+  }
+
+  const sendMediaPanel = (anchor: { x: number; top: number; height: number }) => {
+    whenOverlayShown(() => {
+      if (!overlay || overlay.isDestroyed()) return
+      // The pointer may have left while the window was coming up.
+      if (panelAnchor !== anchor && !panelAnchor) return
+      const info = composeMedia()
+      if (!info) return
+      overlay.webContents.send(IpcChannels.mediaPanel, { info, ...anchor })
+    })
+  }
+
+  /**
+   * The history square drawn inside the music Pod's own area - shown only while
+   * that Pod is the one on screen, since it is the only Pod whose links walk
+   * you away from what you were doing with no chrome to come back with.
+   */
+  const pushMusicNav = () => {
+    if (!overlay || overlay.isDestroyed()) return
+    const id = state.musicPodId
+    if (!id || pods.activePodId !== id) {
+      overlay.webContents.send(IpcChannels.musicNav, null)
+      return
+    }
+    const { muted: _muted, ...history } = pods.transportOf(id)
+    const area = pods.workspace
+    // The square has no entrance animation of its own, so it does not need the
+    // window to have settled first - but it does need the window up.
+    showOverlay()
+    overlay.webContents.send(IpcChannels.musicNav, {
+      x: Math.round(area.x),
+      y: Math.round(area.y),
+      ...history
+    })
+  }
+
+  const hideMediaPanel = () => {
+    panelAnchor = null
+    if (!overlay || overlay.isDestroyed()) return
+    overlay.webContents.send(IpcChannels.mediaPanel, null)
+  }
+
+  ipcMain.on(IpcChannels.overlayMediaCommand, (event, command: MediaCommand, value?: number) => {
+    if (event.sender !== overlay?.webContents) return
+    runMediaCommand({ command, value })
+  })
+
+  ipcMain.on(IpcChannels.mediaPanelHover, (event, hovering: boolean) => {
+    if (event.sender !== overlay?.webContents) return
+    clearTimeout(panelHideTimer)
+    if (!hovering) panelHideTimer = setTimeout(hideMediaPanel, PANEL_GRACE_MS)
+  })
+
   // A download is not the answer to an invoke: it arrives at the session. Wired
   // when a Pod's view is created, once per session (Pods sharing a partition
   // share one).
-  pods.onSession = (_id, session) => downloads.wire(session)
+  pods.onSession = (id, session) => {
+    downloads.wire(session)
+    // Turned on here rather than on the toggle, so a Pod that had it enabled
+    // last time starts blocking before its page makes its first request.
+    const pod = state.pods.find((p) => p.id === id)
+    if (pod?.settings?.adblock) {
+      adblock.enable(session).catch(() => {
+        // Offline on the very first run, with nothing cached yet: the Pod
+        // loads without blocking rather than not loading at all.
+      })
+    }
+  }
 
   // Progress goes back to the page that asked, on one channel for the whole Pod:
   // each event says which download it is about, and the page sorts them out.
@@ -536,7 +773,7 @@ export function registerIpc(
   }
 
   // Stopping and revealing re-check the permission rather than trusting the
-  // handle: revoking Download Access must stop a download already under way —
+  // handle: revoking Download Access must stop a download already under way -
   // and `forget` on revocation already cancels it.
   pods.onDownloadCancel = async (id, downloadId): Promise<DownloadResult> =>
     downloads.cancel(id, downloadId)
@@ -626,7 +863,7 @@ export function registerIpc(
   pods.onZoom = (id, zoom) => {
     const pod = state.pods.find((p) => p.id === id)
     if (!pod) return
-    // Back to 100% drops the saved factor only — the Pod's other settings (git,
+    // Back to 100% drops the saved factor only - the Pod's other settings (git,
     // exec, scripting, Keep Awake) have nothing to do with zoom.
     pod.settings = { ...pod.settings, zoom: zoom === 1 ? undefined : zoom }
     persist()
@@ -640,8 +877,8 @@ export function registerIpc(
   }
 
   /**
-   * Refuse everything still on screen. The chrome reloading — a crash, or HMR
-   * in dev — takes its dialogs with it, and a page blocked on a promise nobody
+   * Refuse everything still on screen. The chrome reloading - a crash, or HMR
+   * in dev - takes its dialogs with it, and a page blocked on a promise nobody
    * can answer any more would wait for ever. A refusal here is NOT remembered:
    * only the permission handlers write to `pod.settings`, so the next call asks
    * again.
@@ -656,7 +893,7 @@ export function registerIpc(
 
   // --- Keep Awake -------------------------------------------------------
   // Pods marked awake are loaded without being shown, so the app inside is
-  // connected — and can notify — before it has ever been clicked. Deferred:
+  // connected - and can notify - before it has ever been clicked. Deferred:
   // the point of startup is DeskPods' own window appearing, not a background
   // Pod competing with it for the first seconds. One timer, once, no polling.
   const AWAKE_DELAY_MS = 4_000
@@ -682,13 +919,23 @@ export function registerIpc(
     else loading.delete(id)
     const pod = state.pods.find((p) => p.id === id)
     if (pod) pushPod(pod)
+    // A finished load is also when the music Pod's history changed, and the
+    // square's arrows are that history.
+    if (!isLoading && id === state.musicPodId) pushMusicNav()
+  }
+
+  pods.onNavigated = (id) => {
+    if (id === state.musicPodId) pushMusicNav()
   }
 
   // The overlay window is shown only while it has content to draw; a hidden
   // window costs the compositor nothing, a visible transparent one is blended
   // every frame. It reports back (overlayIdle) once everything faded out.
   const showOverlay = () => {
-    if (overlay && !overlay.isDestroyed() && !overlay.isVisible()) overlay.showInactive()
+    if (overlay && !overlay.isDestroyed() && !overlay.isVisible()) {
+      overlayShownAt = Date.now()
+      overlay.showInactive()
+    }
   }
   // Toasts are clickable; everything else in the overlay stays click-through.
   const setHitAreas = overlay ? createHitAreaTracker(overlay) : () => {}
@@ -810,20 +1057,99 @@ export function registerIpc(
     state.activePodId = id
     pods.activate(id)
     // Viewing a Pod clears a title-less Notification signal (its only "read"
-    // cue). A count carried in the title is NOT cleared here — it clears only
+    // cue). A count carried in the title is NOT cleared here - it clears only
     // when the web app itself drops it, so the badge survives switching Pods.
     notified.delete(id)
     refreshUnread()
+    // Stepping onto or off the music Pod puts its history square up or takes
+    // it down: it belongs to that Pod's area, not to the app.
+    pushMusicNav()
     saveState(state)
   })
 
   handle(IpcChannels.updateBounds, (_e, bounds: Rect): void => {
     pods.updateBounds(bounds)
+    // The square sits inside that rectangle, so it moves with it.
+    pushMusicNav()
   })
 
   handle(IpcChannels.setOverlay, (_e, active: boolean): void => {
     pods.setOverlay(active)
   })
+
+  handle(IpcChannels.setMusicPod, (_e, id: PodId | null, options?: { enableAdblock?: boolean }) => {
+    setMusicPod(id, options?.enableAdblock === true)
+  })
+
+  handle(IpcChannels.setMusicService, (_e, url: string, name?: string): void => {
+    const id = state.musicPodId
+    const pod = id ? state.pods.find((p) => p.id === id) : undefined
+    if (!id || !pod) return
+
+    // A service the built-in list does not offer is remembered, so it does not
+    // have to be typed twice. Moved to the front rather than appended: the one
+    // just used is the one most likely wanted again.
+    if (!MUSIC_SITES.some((site) => site.url === url)) {
+      const kept = (state.musicUrls ?? []).filter((known) => known !== url)
+      kept.unshift(url)
+      state.musicUrls = kept.slice(0, MAX_REMEMBERED_MUSIC_URLS)
+    }
+
+    pod.url = url
+    // The name follows the service only while the Pod is still auto-named: a
+    // Pod the user renamed keeps the name they gave it.
+    if (name && autoNamed.has(id)) pod.name = name
+    // The icon belonged to the site that was there; cleared, the Pod falls back
+    // to its initial until the new page reports one.
+    pod.icon = undefined
+    // Whatever it was playing was the other service's track.
+    report = null
+
+    /**
+     * The view is DESTROYED and built again, rather than navigated.
+     *
+     * Navigating a page that is playing does not reliably work: it can refuse
+     * to be unloaded, and the switch then silently did nothing, which is the
+     * bug this replaces. Negotiating with the page for permission is not worth
+     * it when switching service means leaving that service anyway - stopping
+     * the music is the expected outcome, not a side effect to avoid.
+     *
+     * A destroyed web contents has no say. The session stays on disk, so the
+     * service is still signed in when you come back to it, and `activate`
+     * builds the new view straight from the url set just above.
+     */
+    pods.suspend(id)
+    pods.stopFind()
+    state.activePodId = id
+    pods.activate(id)
+    notified.delete(id)
+    refreshUnread()
+    pushMusicNav()
+
+    persist()
+    pushState()
+    pushMedia()
+  })
+
+  handle(IpcChannels.mediaCommand, (_e, command: MediaCommand, value?: number): void => {
+    runMediaCommand({ command, value })
+  })
+
+  handle(
+    IpcChannels.showMediaPanel,
+    (_e, anchor: { x: number; top: number; height: number } | null): void => {
+      if (anchor) {
+        panelAnchor = anchor
+        clearTimeout(panelHideTimer)
+        sendMediaPanel(anchor)
+        return
+      }
+      // Not hidden at once: the pointer has to cross the gap between the sidebar
+      // and the panel, and the panel says when it has taken over.
+      clearTimeout(panelHideTimer)
+      panelHideTimer = setTimeout(hideMediaPanel, PANEL_GRACE_MS)
+    }
+  )
 
   handle(
     IpcChannels.gitPermission,
@@ -909,9 +1235,20 @@ export function registerIpc(
     if (patch.icon !== undefined) pod.icon = patch.icon
     if (patch.url !== undefined && patch.url !== pod.url) {
       pod.url = patch.url
+      // The icon belongs to the site that was there, not to the Pod: kept, it
+      // would sit in the sidebar advertising the old service until the new one
+      // happened to report a favicon of its own. Cleared, the Pod falls back to
+      // its initial until the new page says otherwise.
+      if (patch.icon === undefined) pod.icon = undefined
       pods.loadUrl(id, patch.url)
+      // Same for what it was playing - that was the other service's track.
+      if (id === state.musicPodId) {
+        report = null
+        pushMedia()
+      }
     }
     persist()
+    pushState()
   })
 
   handle(IpcChannels.reorderPods, (_e, placements: PodPlacement[]): void => {
@@ -1060,7 +1397,7 @@ export function registerIpc(
               click: () => {
                 pods.resetZoom(id)
                 // A suspended Pod has no view to reset, so drop the saved
-                // factor here as well — the factor only, not the whole
+                // factor here as well - the factor only, not the whole
                 // settings object.
                 if (pod.settings?.zoom) {
                   pod.settings = { ...pod.settings, zoom: undefined }
@@ -1072,10 +1409,41 @@ export function registerIpc(
           ]
         : []),
       {
+        // Off by default: most Pods have nothing to block, and the engine is
+        // only built once some Pod asks for it. Enabling on a live Pod reloads
+        // the page, so the answer is visible straight away rather than from
+        // the next navigation on.
+        label: 'Block Ads & Trackers',
+        type: 'checkbox',
+        checked: pod.settings?.adblock === true,
+        click: () => {
+          const on = pod.settings?.adblock !== true
+          pod.settings = { ...pod.settings, adblock: on || undefined }
+          persist()
+          pushState()
+
+          const session = pods.sessionFor(id)
+          if (!session) return
+          if (!on) {
+            adblock.disable(session)
+            pods.reload(id)
+            return
+          }
+          adblock
+            .enable(session)
+            .then(() => pods.reload(id))
+            .catch(() => {
+              // Building the engine needs the filter lists once; offline with
+              // nothing cached, the Pod simply carries on unblocked.
+            })
+        }
+      },
+      { type: 'separator' },
+      {
         // Chromium backgrounds every Pod but the active one: timers slow down
         // and the page is told it is hidden, which is how a chat app decides to
         // go away. This opts the Pod out, and loads it at startup rather than
-        // on first click. It costs battery — hence a choice, not a default.
+        // on first click. It costs battery - hence a choice, not a default.
         label: 'Keep Awake',
         type: 'checkbox',
         checked: pod.settings?.awake === true,
@@ -1091,24 +1459,39 @@ export function registerIpc(
         }
       },
       { type: 'separator' },
-      {
-        // Free the Pod's renderer/GPU cost now; its session stays on disk and
-        // the next click reloads it. Only meaningful when a live view exists.
-        label: 'Suspend',
-        enabled: pods.hasView(id),
-        click: () => {
-          pages.closeAllFor(id)
-          commands.killAllFor(id)
-          pods.suspend(id)
-        }
-      },
-      {
-        label: 'Delete',
-        click: () => {
-          removePod(id)
-          pushState()
-        }
-      }
+      // The music Pod is a fixture, not an entry in the list: it has its own
+      // slot and the player depends on it. Changing SERVICE is what "delete and
+      // make another one" was standing in for, so that is offered instead -
+      // and Suspend, which would silence the music mid-track, is not offered at
+      // all. Clearing the slot lives in the same dialog.
+      ...(state.musicPodId === id
+        ? [
+            {
+              label: 'Change Music Service…',
+              click: () => send(IpcChannels.uiCommand, { type: 'music-pod' })
+            } as MenuItemConstructorOptions
+          ]
+        : [
+            {
+              // Free the Pod's renderer/GPU cost now; its session stays on disk
+              // and the next click reloads it. Only meaningful when a live view
+              // exists.
+              label: 'Suspend',
+              enabled: pods.hasView(id),
+              click: () => {
+                pages.closeAllFor(id)
+                commands.killAllFor(id)
+                pods.suspend(id)
+              }
+            } as MenuItemConstructorOptions,
+            {
+              label: 'Delete',
+              click: () => {
+                removePod(id)
+                pushState()
+              }
+            } as MenuItemConstructorOptions
+          ])
     ]
     Menu.buildFromTemplate(template).popup({ window })
   })

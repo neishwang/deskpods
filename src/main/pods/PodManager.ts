@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { MEDIA_HOOK } from '@main/pods/mediaHook'
 import {
   type DownloadResult,
   type DownloadStartRequest,
@@ -15,6 +16,7 @@ import {
   IpcChannels,
   type ListDirRequest,
   type ListDirResult,
+  type MediaReport,
   type OpenPageOptions,
   type OpenPageResult,
   type Pod,
@@ -28,6 +30,7 @@ import {
   type WriteFileResult
 } from '@types'
 import {
+  app,
   type BrowserWindow,
   clipboard,
   Menu,
@@ -42,7 +45,7 @@ import {
  * What a Pod's pages may ask Chromium for.
  *
  * The line is drawn at data: these give a page a better time on screen without
- * telling it anything it did not already know. Notifications are the point —
+ * telling it anything it did not already know. Notifications are the point -
  * the unread badge is built on them; the clipboard pair is what makes a web
  * app's own copy/paste buttons work; fullscreen and pointer lock are pure UI;
  * storage is where the app already keeps its own data.
@@ -68,9 +71,9 @@ const ALLOWED_PERMISSIONS = new Set([
  * app raises, instead of letting it show its own (OS/native, out-of-theme) popup.
  * We intercept BOTH notification paths and forward title/body to main, which
  * draws a themed, non-blocking toast above the Pods and lights the taskbar badge:
- *   1. `new Notification(...)` — replaced by an inert stub that also reports
+ *   1. `new Notification(...)` - replaced by an inert stub that also reports
  *      `permission: 'granted'` so apps take this path rather than an in-page modal.
- *   2. `ServiceWorkerRegistration.showNotification(...)` — the path modern Google
+ *   2. `ServiceWorkerRegistration.showNotification(...)` - the path modern Google
  *      apps (Chat, Calendar) and Discord actually use; wrapped to forward and
  *      resolve without showing a native popup.
  * Injected with `executeJavaScript` so it bypasses the page's CSP.
@@ -128,6 +131,27 @@ const NOTIFICATION_HOOK = `(() => {
 })();`
 
 /**
+ * The user agent Pods present: Chromium's own, with Electron's and DeskPods'
+ * tokens taken out.
+ *
+ * Left alone, every request announces `DeskPods/1.5.0 Electron/44.3.0`, and web
+ * apps that sniff the user agent do not recognise it. Spotify is the clearest
+ * case - it serves its "unsupported browser" page, the one with an Open the app
+ * button instead of the player - but anything that gates on a browser allow-list
+ * behaves the same way.
+ *
+ * Derived from Chromium's real string rather than written out, so the Chrome
+ * version stays truthful and follows Electron upgrades on its own.
+ */
+export function browserUserAgent(): string {
+  return app.userAgentFallback
+    .replace(/\s*DeskPods\/\S+/i, '')
+    .replace(/\s*Electron\/\S+/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/**
  * Chromium's own zoom ladder. Ctrl+wheel and Ctrl+`+`/`-` walk these steps, so
  * zooming feels exactly like it does in a browser instead of drifting by an
  * arbitrary delta.
@@ -161,10 +185,15 @@ export class PodManager {
   private readonly window: BrowserWindow
   private readonly views = new Map<PodId, WebContentsView>()
   /** Popups a Pod opened with window.open (OAuth and friends), kept so they
-   *  never outlive the Pod — nor the app. */
+   *  never outlive the Pod - nor the app. */
   private readonly popups = new Map<PodId, Set<BrowserWindow>>()
   private readonly podsById = new Map<PodId, Pod>()
   private activeId: PodId | null = null
+  /** Which Pod the mini player drives; only that one gets the media hook. */
+  private musicPodId: PodId | null = null
+  /** Debugger sessions used for hook installation, and which hooks each one
+   *  already carries. Dropped when the debugger detaches. */
+  private readonly cdp = new WeakMap<WebContents, Set<string>>()
   private bounds: Rect = { x: 0, y: 0, width: 0, height: 0 }
   /** When true, the active view is hidden so an HTML overlay (dialog) shows. */
   private overlay = false
@@ -200,7 +229,7 @@ export class PodManager {
   onWriteFileRequest?: (id: PodId, request: WriteFileRequest) => Promise<WriteFileResult>
   /** Set by the IPC layer: the Pod's page asked to download a file with this
    *  Pod's session, to stop one, or to show a finished one on disk. `sender` is
-   *  the page that asked — the download itself is started from it, so it carries
+   *  the page that asked - the download itself is started from it, so it carries
    *  the session (and the login) the page is already using. */
   onDownloadStart?: (
     id: PodId,
@@ -210,10 +239,17 @@ export class PodManager {
   onDownloadCancel?: (id: PodId, downloadId: string) => Promise<DownloadResult>
   onDownloadReveal?: (id: PodId, path: string) => Promise<DownloadResult>
   /** Set by the IPC layer: a Pod's session has just been created, for whatever
-   *  has to be listened to on the SESSION rather than on an invoke — downloads
+   *  has to be listened to on the SESSION rather than on an invoke - downloads
    *  arrive there. Called once per view; Pods sharing a partition hand over the
    *  same session, which the listener is expected to wire only once. */
   onSession?: (id: PodId, session: Session) => void
+
+  /** Set by the IPC layer: the music Pod reported what it is playing. */
+  onMedia?: (id: PodId, info: MediaReport) => void
+
+  /** Set by the IPC layer: a Pod's page navigated, in-page navigation included.
+   *  Its history changed, which is what the music Pod's back/forward read. */
+  onNavigated?: (id: PodId) => void
   /** Set by the IPC layer: the Pod's page wants to drive a background page. */
   onOpenPage?: (id: PodId, url: string, options?: OpenPageOptions) => Promise<OpenPageResult>
   onRunScript?: (id: PodId, handle: string, code: string) => Promise<ScriptResult>
@@ -241,6 +277,14 @@ export class PodManager {
   send(id: PodId, channel: string, payload: unknown): void {
     const wc = this.views.get(id)?.webContents
     if (wc && !wc.isDestroyed()) wc.send(channel, payload)
+  }
+
+  /** This Pod's Chromium session, or null when it has no live view. Pods
+   *  sharing a partition (`linkTo`) hand back the SAME object, which is what
+   *  lets a session-level setting be toggled once for all of them. */
+  sessionFor(id: PodId): Session | null {
+    const wc = this.views.get(id)?.webContents
+    return wc && !wc.isDestroyed() ? wc.session : null
   }
 
   /** Whether a live view exists for this Pod (i.e. it consumes resources). */
@@ -274,7 +318,15 @@ export class PodManager {
         // Keep Awake opts a Pod out of that, at the window's expense (see
         // setAwake). Off by default: a Pod that nobody watches should cost
         // nothing.
-        backgroundThrottling: pod.settings?.awake !== true
+        //
+        // The music Pod is never throttled, and that is a property of the ROLE
+        // rather than a setting the user has to find. Throttled, its timers
+        // drop to about one a minute and its page is told it is hidden, so the
+        // mini player froze and the page stopped following the far end - both
+        // of which came back the instant the Pod was brought forward, which is
+        // precisely the situation the player exists to avoid. A player that
+        // only updates while you are looking at the Pod has no reason to be.
+        backgroundThrottling: pod.settings?.awake !== true && this.musicPodId !== pod.id
       }
     })
     this.window.contentView.addChildView(view)
@@ -284,15 +336,24 @@ export class PodManager {
 
     // Grant only the permissions a web app needs to behave like it does in
     // Chromium (see ALLOWED_PERMISSIONS). The handlers are per SESSION, so
-    // Pods sharing a partition share them — which is right: they share a login
+    // Pods sharing a partition share them - which is right: they share a login
     // too.
     wc.session.setPermissionRequestHandler((_wc, permission, callback) =>
       callback(ALLOWED_PERMISSIONS.has(permission))
     )
+
+    // Present as plain Chromium (see browserUserAgent). Set on the WEB CONTENTS,
+    // not only on the session: a session's user agent does not reach contents
+    // that already exist, and this one was created a few lines above with the
+    // app default - which then wins. The session is set too, for the requests
+    // that do not come from this page (service workers, and anything on this
+    // partition created later).
+    wc.setUserAgent(browserUserAgent())
+    wc.session.setUserAgent(browserUserAgent())
     wc.session.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission))
 
     // Downloads are not the answer to an invoke: they arrive at the session.
-    // Wired here, beside the other session-level guard rails, and once — the
+    // Wired here, beside the other session-level guard rails, and once - the
     // session is shared by every Pod on this partition.
     this.onSession?.(pod.id, wc.session)
 
@@ -303,15 +364,46 @@ export class PodManager {
     })
 
     // Loading indicator for the sidebar.
+    /**
+     * Room for listeners this app does not add.
+     *
+     * Node warns at 10 per event, on the assumption that more means a leak.
+     * Here it does not: a Pod running the ad blocker gets one
+     * `once('did-stop-loading')` parked per cosmetic-filter injection, because
+     * the blocker injects with `executeJavaScript` and Electron defers that
+     * until a loading page settles. One injection per frame on a page with
+     * many frames passes 10 easily, and they all clear when loading stops.
+     *
+     * Raised rather than silenced, and raised by a bounded amount: crossing 50
+     * would once again mean something is genuinely accumulating.
+     */
+    wc.setMaxListeners(50)
+
     wc.on('did-start-loading', () => this.onLoading?.(pod.id, true))
     wc.on('did-stop-loading', () => this.onLoading?.(pod.id, false))
 
+    // History changes. `did-navigate-in-page` is the one that matters here: a
+    // music service routes by pushState and never finishes a "load", so a
+    // back/forward button refreshed only on load would sit there greyed out
+    // however far you had browsed.
+    wc.on('did-navigate', () => this.onNavigated?.(pod.id))
+    wc.on('did-navigate-in-page', () => this.onNavigated?.(pod.id))
+
     // Hook the Notification API on every load, and forward each notification
     // (bridged by the Pod preload) as an unread signal for this Pod.
+    // Both hooks, at document start where the debugger allows it. Still driven
+    // from `dom-ready` because that is the signal that there IS a document to
+    // cover; the installation itself is idempotent per web contents.
+    //
+    // The media hook goes only to the music Pod: every other one would be
+    // paying for a poller whose reports nobody reads.
     wc.on('dom-ready', () => {
-      wc.executeJavaScript(NOTIFICATION_HOOK).catch(() => {
-        // Injection can fail on non-HTML responses; safe to ignore.
-      })
+      void this.installHooks(wc, pod.id)
+    })
+    wc.ipc.on(IpcChannels.podMedia, (_e, info: MediaReport) => {
+      // Checked again here: a Pod that has just lost the role keeps its hook
+      // until the next navigation, and its reports are no longer wanted.
+      if (this.musicPodId === pod.id && info) this.onMedia?.(pod.id, info)
     })
     wc.ipc.on(IpcChannels.podNotification, (_e, payload: PodNotifyPayload) =>
       this.onNotification?.(pod.id, payload ?? { title: '' })
@@ -503,7 +595,7 @@ export class PodManager {
       const key = input.key.toLowerCase()
       const ctrl = input.control || input.meta
 
-      // Reload — F5 / Ctrl+R, and their cache-busting variants.
+      // Reload - F5 / Ctrl+R, and their cache-busting variants.
       if ((key === 'f5' && !input.shift) || (ctrl && key === 'r' && !input.shift)) {
         event.preventDefault()
         wc.reload()
@@ -515,7 +607,7 @@ export class PodManager {
         return
       }
 
-      // History — Alt+Left / Alt+Right.
+      // History - Alt+Left / Alt+Right.
       if (input.alt && (key === 'arrowleft' || key === 'arrowright')) {
         event.preventDefault()
         if (key === 'arrowleft') {
@@ -528,7 +620,7 @@ export class PodManager {
 
       if (!ctrl) return
 
-      // Zoom — Ctrl+`+` / Ctrl+`-` / Ctrl+0.
+      // Zoom - Ctrl+`+` / Ctrl+`-` / Ctrl+0.
       if (key === '=' || key === '+') {
         event.preventDefault()
         this.stepZoom(pod.id, 1)
@@ -551,8 +643,18 @@ export class PodManager {
 
     // Link clicks / new tabs open in the OS browser; only window.open popups
     // (e.g. OAuth) stay in-app, sharing this Pod's session.
+    //
+    // The music Pod is the exception, and it has to be: its links are tracks,
+    // albums and playlists that only mean anything inside the session that is
+    // signed in. Handing them to the default browser both loses the login and
+    // takes the user out of the app to play music. They navigate in place, and
+    // the panel's Back button is what undoes a wrong turn.
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (disposition === 'new-window') return { action: 'allow' }
+      if (this.musicPodId === pod.id) {
+        void wc.loadURL(url)
+        return { action: 'deny' }
+      }
       void shell.openExternal(url)
       return { action: 'deny' }
     })
@@ -572,7 +674,7 @@ export class PodManager {
    * Keep a popup with the Pod that opened it, and answer the bridge inside it.
    *
    * Chromium copies the opener's webPreferences, so the Pod preload is loaded
-   * there and `window.__deskpods` exists — but the handlers live on the Pod's
+   * there and `window.__deskpods` exists - but the handlers live on the Pod's
    * OWN web contents, and an invoke nobody handles REJECTS. Every caller in
    * this project is written to read a result, never to catch, so a popup
    * answers with a refusal rather than throwing.
@@ -620,7 +722,7 @@ export class PodManager {
 
   /**
    * The Pod's right-click menu. Electron never exposes Chromium's own menu, but
-   * Chrome builds its menu from exactly the `params` we get here — so this is
+   * Chrome builds its menu from exactly the `params` we get here - so this is
    * the same menu, minus the browser-only entries a Pod has no use for.
    */
   private showContextMenu(wc: Electron.WebContents, params: Electron.ContextMenuParams): void {
@@ -679,7 +781,7 @@ export class PodManager {
     // (Win+V). Excluding it needs the `ExcludeClipboardContentFromMonitorProcessing`
     // / `CanIncludeInClipboardHistory` formats written ATOMICALLY with the text,
     // which Electron 33's clipboard API cannot do (writeBuffer replaces the
-    // content). And it would only ever cover the copies DeskPods makes itself —
+    // content). And it would only ever cover the copies DeskPods makes itself -
     // a Ctrl+C inside a page is Chromium's own write, out of reach from here.
     if (params.linkURL) {
       group(
@@ -737,8 +839,8 @@ export class PodManager {
    * Run Chromium's in-page search on the active Pod.
    *
    * `findNext` is handed straight to Chromium's `new_session` flag WITHOUT being
-   * inverted, so passing it as `false` — the value Electron documents as "first
-   * request" — actually means "carry on the previous session" and the call
+   * inverted, so passing it as `false` - the value Electron documents as "first
+   * request" - actually means "carry on the previous session" and the call
    * silently does nothing with the new text. A fresh search must omit the key
    * altogether; only stepping between matches sets it.
    */
@@ -784,6 +886,42 @@ export class PodManager {
     }
   }
 
+  /** Back / forward on ONE Pod, which need not be the active one - the media
+   *  panel drives the music Pod from wherever the user happens to be. */
+  navigatePod(id: PodId, direction: 'back' | 'forward'): void {
+    const wc = this.views.get(id)?.webContents
+    if (!wc || wc.isDestroyed()) return
+    const history = wc.navigationHistory
+    if (direction === 'back') {
+      if (history.canGoBack()) history.goBack()
+    } else if (history.canGoForward()) {
+      history.goForward()
+    }
+  }
+
+  /**
+   * Mute a Pod at the web-contents level rather than through the page. It
+   * silences everything the Pod can play whatever the site's own controls do,
+   * and it survives a track change or a reload - which a muted `<audio>`
+   * element would not.
+   */
+  toggleMuted(id: PodId): void {
+    const wc = this.views.get(id)?.webContents
+    if (!wc || wc.isDestroyed()) return
+    wc.setAudioMuted(!wc.isAudioMuted())
+  }
+
+  /** Mute state and history, for the parts of the player main owns. */
+  transportOf(id: PodId): { muted: boolean; canGoBack: boolean; canGoForward: boolean } {
+    const wc = this.views.get(id)?.webContents
+    if (!wc || wc.isDestroyed()) return { muted: false, canGoBack: false, canGoForward: false }
+    return {
+      muted: wc.isAudioMuted(),
+      canGoBack: wc.navigationHistory.canGoBack(),
+      canGoForward: wc.navigationHistory.canGoForward()
+    }
+  }
+
   activate(id: PodId): void {
     const pod = this.podsById.get(id)
     if (!pod) return
@@ -809,6 +947,12 @@ export class PodManager {
   }
 
   /** Called whenever the renderer's workspace region moves or resizes. */
+  /** The workspace rectangle the active Pod fills, in window coordinates. The
+   *  overlay needs it to place anything drawn INSIDE a Pod's area. */
+  get workspace(): Rect {
+    return this.bounds
+  }
+
   updateBounds(bounds: Rect): void {
     this.bounds = bounds
     if (this.activeId) {
@@ -818,10 +962,31 @@ export class PodManager {
   }
 
   /** Reload a Pod's view at a new URL (after the user edits it). No-op if the
-   *  view has not been created yet — it will load the new URL on first open. */
-  loadUrl(id: PodId, url: string): void {
+   *  view has not been created yet - it will load the new URL on first open. */
+  /**
+   * Send a Pod's page to `url`.
+   *
+   * The rejection is CAUGHT rather than voided, which it used to be: a load
+   * that fails leaves the Pod on the old page, and silently dropping the reason
+   * makes that indistinguishable from a load that worked. ERR_ABORTED (-3) is
+   * the exception worth ignoring - it is what a page that immediately redirects
+   * looks like, and the navigation did happen.
+   *
+   * A page that refuses to be unloaded still wins here, and deliberately so:
+   * this is the general navigation path, where a page keeps its say. The music
+   * Pod's service switch does not use it for that reason - it rebuilds the view
+   * instead (see the setMusicService handler).
+   */
+  async loadUrl(id: PodId, url: string): Promise<void> {
     const view = this.views.get(id)
-    if (view && !view.webContents.isDestroyed()) void view.webContents.loadURL(url)
+    if (!view || view.webContents.isDestroyed()) return
+    try {
+      await view.webContents.loadURL(url)
+    } catch (error) {
+      if ((error as { errno?: number }).errno === -3) return
+      // Nothing to do beyond not pretending it worked: the Pod is still showing
+      // the page it was showing.
+    }
   }
 
   /** Hide/show the active Pod view so an HTML overlay can appear above it. */
@@ -832,7 +997,7 @@ export class PodManager {
 
   /**
    * Load a Pod without showing it (Keep Awake). Its view is created exactly as
-   * a click would create it — invisible until `activate` — so the app inside is
+   * a click would create it - invisible until `activate` - so the app inside is
    * connected, and can raise notifications, before it has ever been opened.
    * No-op once the view exists.
    */
@@ -855,8 +1020,135 @@ export class PodManager {
    * included. One awake Pod therefore costs the window, not just itself.
    */
   setAwake(id: PodId, awake: boolean): void {
+    // The music Pod's exemption outranks the setting: turning Keep Awake off
+    // here would put the player back to freezing the moment you looked away.
+    if (this.musicPodId === id && !awake) return
     const wc = this.views.get(id)?.webContents
     if (wc && !wc.isDestroyed()) wc.setBackgroundThrottling(!awake)
+  }
+
+  /** Reload a Pod's page, when a setting only takes effect on a fresh load.
+   *  No-op on a suspended Pod: the next click loads it with the new answer. */
+  reload(id: PodId): void {
+    const wc = this.views.get(id)?.webContents
+    if (wc && !wc.isDestroyed()) wc.reload()
+  }
+
+  /**
+   * The debugger session used to install our hooks, or null when there is none
+   * to be had. The set records which hooks are already registered on it.
+   *
+   * Attached lazily and once per web contents. It is an exclusive resource:
+   * opening DevTools on a Pod detaches it, which is why every path here falls
+   * back to plain injection rather than treating it as fatal.
+   */
+  private async cdpFor(wc: WebContents): Promise<Set<string> | null> {
+    const existing = this.cdp.get(wc)
+    if (existing) return existing
+    try {
+      if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
+      // Page has to be enabled before a document-start script is accepted.
+      await wc.debugger.sendCommand('Page.enable')
+    } catch {
+      return null
+    }
+    const installed = new Set<string>()
+    this.cdp.set(wc, installed)
+    wc.debugger.once('detach', () => this.cdp.delete(wc))
+    return installed
+  }
+
+  /**
+   * Run `source` in this page, and in every page it navigates to afterwards.
+   *
+   * Both halves go through the debugger, and NOT through `executeJavaScript`,
+   * for two separate reasons that happen to have the same remedy:
+   *
+   *   - `addScriptToEvaluateOnNewDocument` runs before the page's own scripts.
+   *     The media hook needs that, because media-session handlers cannot be
+   *     read back and are therefore captured by wrapping `setActionHandler`:
+   *     anything registered before the wrapper is in place is invisible.
+   *     Measured on Apple Music, which registers early - not one handler seen,
+   *     while its keyboard media keys worked. The notification hook wants it
+   *     for the same reason, a page being free to raise a notification before
+   *     its stub exists.
+   *
+   *   - `Runtime.evaluate` runs in the CURRENT document immediately.
+   *     `executeJavaScript` does not: on a page that is still loading it waits
+   *     behind `did-stop-loading`, and a page that never finishes loading is a
+   *     page our hooks never reach. That deferral was also the source of the
+   *     "11 did-stop-loading listeners" warning - one listener parked per
+   *     injection, none of them firing.
+   *
+   * Returns whether the page is covered, so the caller knows if it still has
+   * to fall back.
+   */
+  private async installHook(wc: WebContents, key: string, source: string): Promise<boolean> {
+    const installed = await this.cdpFor(wc)
+    if (!installed) return false
+    try {
+      if (!installed.has(key)) {
+        await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source })
+        installed.add(key)
+      }
+      // A document-start script only applies to documents created after it was
+      // added, so the one already here is run directly.
+      await wc.debugger.sendCommand('Runtime.evaluate', {
+        expression: source,
+        // The page's own world, which is where the APIs being wrapped live.
+        includeCommandLineAPI: false,
+        awaitPromise: false
+      })
+      return true
+    } catch (error) {
+      if (!app.isPackaged) console.log('[cdp] install', key, 'failed:', String(error).slice(0, 160))
+      return false
+    }
+  }
+
+  /** Put the hooks this Pod should have in place, falling back to injection
+   *  for whichever the debugger could not carry. */
+  private async installHooks(wc: WebContents, id: PodId): Promise<void> {
+    if (!(await this.installHook(wc, 'notification', NOTIFICATION_HOOK))) {
+      this.inject(wc, NOTIFICATION_HOOK)
+    }
+    if (this.musicPodId !== id) return
+    if (!(await this.installHook(wc, 'media', MEDIA_HOOK))) this.inject(wc, MEDIA_HOOK)
+  }
+
+  /** Last resort: injection into the current document only, and only once the
+   *  page stops loading (see installHook for why that is a problem). */
+  private inject(wc: WebContents, source: string): void {
+    if (wc.isDestroyed()) return
+    wc.executeJavaScript(source).catch(() => {
+      // Nothing to inject into on a non-HTML response, and a page that threw
+      // has nothing useful to report from here either.
+    })
+  }
+
+  /**
+   * Hand the music-Pod role to `id` (or drop it with null). A Pod that is
+   * already live is hooked on the spot, so the mini player fills in without
+   * waiting for a reload.
+   */
+  setMusicPod(id: PodId | null): void {
+    if (this.musicPodId === id) return
+    const previous = this.musicPodId
+    this.musicPodId = id
+
+    // Throttling is decided at view creation, so a Pod that is ALREADY live has
+    // to be told on the spot - both the one taking the role and the one losing
+    // it, which goes back to whatever its own Keep Awake says.
+    if (previous) {
+      const old = this.views.get(previous)?.webContents
+      const settings = this.podsById.get(previous)?.settings
+      if (old && !old.isDestroyed()) old.setBackgroundThrottling(settings?.awake !== true)
+    }
+    if (!id) return
+    const wc = this.views.get(id)?.webContents
+    if (!wc || wc.isDestroyed()) return
+    wc.setBackgroundThrottling(false)
+    void this.installHooks(wc, id)
   }
 
   /** Free the renderer/GPU cost of a Pod while keeping its session on disk. */

@@ -23,6 +23,13 @@ export function RootLayout(): React.JSX.Element {
   // Run the dialog-opening actions raised by main's native context menus.
   useEffect(() => ipc.onUiCommand(run), [run])
 
+  // What the music Pod is playing, for the mini player at the foot of the
+  // sidebar. Runtime state: nothing to load, it simply starts arriving once
+  // the Pod is loaded and playing.
+  useEffect(() => {
+    return ipc.onMediaState((info) => usePodStore.getState().applyMedia(info))
+  }, [])
+
   // Replace state after native-menu mutations (move / delete / folder edits).
   useEffect(() => {
     return ipc.onStateChanged((state) => usePodStore.getState().replaceState(state))

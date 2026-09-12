@@ -6,6 +6,8 @@ import type {
   FolderId,
   FolderPatch,
   FolderPlacement,
+  MediaCommand,
+  MediaInfo,
   Pod,
   PodId,
   PodPatch,
@@ -23,8 +25,17 @@ type SidebarDialog =
   | { type: 'exec-permission'; id: PodId; origin: string; command: string }
   | { type: 'scripting-permission'; id: PodId; origin: string; target: string }
   | { type: 'download-permission'; id: PodId; origin: string; url: string }
+  | { type: 'music-pod' }
 
 interface PodStore extends AppState {
+  /** Narrowed from AppState, where it is optional because a state file written
+   *  before it existed has no such key. In the store it is always an array:
+   *  `replaceState` fills the gap, so nothing reading it has to. */
+  musicUrls: string[]
+  /** What the music Pod is playing, pushed by main. Null when it is playing
+   *  nothing, or has not been loaded yet - the mini player then shows the Pod
+   *  itself and waits to be clicked. */
+  media: MediaInfo | null
   /** The dialog on screen: the head of the queue below. */
   dialog: SidebarDialog | null
   /**
@@ -53,6 +64,18 @@ interface PodStore extends AppState {
   /** Replace the whole state (pushed by main after a native-menu mutation). */
   replaceState: (state: AppState) => void
 
+  /** Give the music-Pod role to an existing Pod, or drop it with null. */
+  setMusicPod: (id: PodId | null) => Promise<void>
+  /**
+   * Point the music Pod at `url`. Switches the Pod that already holds the role
+   * rather than making a second one - the slot is a fixture, and keeping it
+   * also keeps its partition, so going back to a service you used before finds
+   * you still signed in.
+   */
+  setMusicService: (url: string, name: string) => Promise<void>
+  applyMedia: (info: MediaInfo | null) => void
+  sendMediaCommand: (command: MediaCommand, value?: number) => void
+
   /** Discord-style: drop one Pod on another to create a folder holding both. */
   createFolderWithPods: (podIds: PodId[]) => Promise<void>
   updateFolder: (id: FolderId, patch: FolderPatch) => void
@@ -68,6 +91,9 @@ export const usePodStore = create<PodStore>((set, get) => ({
   pods: [],
   folders: [],
   activePodId: null,
+  musicPodId: null,
+  musicUrls: [],
+  media: null,
   dialogQueue: [],
   loaded: false,
   dialog: null,
@@ -128,8 +154,52 @@ export const usePodStore = create<PodStore>((set, get) => ({
     set({
       pods: state.pods,
       folders: state.folders,
-      activePodId: state.activePodId
+      activePodId: state.activePodId,
+      musicPodId: state.musicPodId ?? null,
+      musicUrls: state.musicUrls ?? []
     }),
+
+  setMusicPod: async (id) => {
+    set({ musicPodId: id, media: null })
+    await ipc.setMusicPod(id)
+  },
+
+  setMusicService: async (url, name) => {
+    const current = get().musicPodId
+    if (current) {
+      // One call, and main owns the whole switch: the url, the name, the icon,
+      // the navigation and the activation. Doing it here as a patch plus an
+      // activate is what let a switch quietly do nothing, because the patch
+      // only navigated when the url differed from the one on record.
+      set({ media: null })
+      await ipc.setMusicService(url, name || undefined)
+      return
+    }
+    // A Pod already pointing at this service is REUSED rather than duplicated:
+    // that Pod holds the login. Without this, emptying the music slot and then
+    // picking the same service again built a second Pod with a fresh profile,
+    // and the account that was signed in stayed behind on the old one.
+    const existing = get().pods.find((p) => p.url === url)
+    if (existing) {
+      set({ musicPodId: existing.id, media: null })
+      await ipc.setMusicPod(existing.id)
+      await get().setActive(existing.id)
+      return
+    }
+
+    const pod = await ipc.createPod({ url, name: name || undefined })
+    set({ pods: [...get().pods, pod], musicPodId: pod.id, media: null })
+    // Ad blocking is ticked by main, not patched from here: `PodPatch` cannot
+    // write settings on purpose. Only a Pod created FOR the role gets it.
+    await ipc.setMusicPod(pod.id, { enableAdblock: true })
+    await get().setActive(pod.id)
+  },
+
+  applyMedia: (info) => set({ media: info }),
+
+  sendMediaCommand: (command, value) => {
+    void ipc.sendMediaCommand(command, value)
+  },
 
   createFolderWithPods: async (podIds) => {
     // The first id is the drop TARGET: the new folder takes its place in the
@@ -242,8 +312,15 @@ export function rootEntriesFrom(pods: Pod[], folders: Folder[]): RootEntry[] {
 }
 
 /** Root-level Pods (no folder), sorted. */
+/**
+ * Every Pod EXCEPT the music one, which has its own slot at the foot of the
+ * sidebar and must not also appear in the list above. Filtered here, in one
+ * place, so the list, the folders and the drag-and-drop sequence all agree.
+ */
+export const selectVisiblePods = (s: PodStore): Pod[] => s.pods.filter((p) => p.id !== s.musicPodId)
+
 export const selectRootPods = (s: PodStore): Pod[] =>
-  s.pods.filter((p) => p.folderId === null).sort(byOrder)
+  s.pods.filter((p) => p.folderId === null && p.id !== s.musicPodId).sort(byOrder)
 
 /** Folders, sorted. */
 export const selectFolders = (s: PodStore): Folder[] => s.folders.slice().sort(byOrder)
@@ -252,4 +329,4 @@ export const selectFolders = (s: PodStore): Folder[] => s.folders.slice().sort(b
 export const selectFolderPods =
   (folderId: FolderId) =>
   (s: PodStore): Pod[] =>
-    s.pods.filter((p) => p.folderId === folderId).sort(byOrder)
+    s.pods.filter((p) => p.folderId === folderId && p.id !== s.musicPodId).sort(byOrder)
