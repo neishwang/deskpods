@@ -1144,13 +1144,16 @@ export class PodManager {
   private async installHook(wc: WebContents, key: string, source: string): Promise<boolean> {
     const installed = await this.cdpFor(wc)
     if (!installed) return false
+    // Already registered means every document since has run it, including this
+    // one. Evaluating again only reached the hook's own re-entry guard, after
+    // shipping and compiling the whole source over CDP for nothing.
+    if (installed.has(key)) return true
     try {
-      if (!installed.has(key)) {
-        await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source })
-        installed.add(key)
-      }
+      await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source })
+      installed.add(key)
       // A document-start script only applies to documents created after it was
-      // added, so the one already here is run directly.
+      // added, so the one already open when the debugger attached is run
+      // directly.
       await wc.debugger.sendCommand('Runtime.evaluate', {
         expression: source,
         // The page's own world, which is where the APIs being wrapped live.
@@ -1158,8 +1161,7 @@ export class PodManager {
         awaitPromise: false
       })
       return true
-    } catch (error) {
-      if (!app.isPackaged) console.log('[cdp] install', key, 'failed:', String(error).slice(0, 160))
+    } catch {
       return false
     }
   }

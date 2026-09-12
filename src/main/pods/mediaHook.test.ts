@@ -55,6 +55,8 @@ function run(options: {
   registerHandlers?: boolean
   /** Run the hook before window.__deskpods exists, as document-start does. */
   bridgeLate?: boolean
+  /** Pretend to be an iframe, where the hook must do nothing at all. */
+  subframe?: boolean
 }): Harness {
   // volume defaults to 1 and muted to false, as a real element does: the pick
   // below reads both.
@@ -76,6 +78,8 @@ function run(options: {
   }
 
   const win: Record<string, unknown> = {
+    // The hook only runs in the main frame, which is what `top === window`
+    // means. A subframe stub is built by the test that checks that.
     __deskpods: {
       media: (info: Record<string, unknown>) => harness.reports.push(info),
       onMediaCommand: (cb: (action: { command: string; value?: number }) => void) => {
@@ -83,6 +87,8 @@ function run(options: {
       }
     }
   }
+
+  win.top = options.subframe ? {} : win
 
   const doc = {
     querySelectorAll: (selector: string) => (selector === 'video, audio' ? elements : []),
@@ -151,6 +157,43 @@ function run(options: {
 }
 
 describe('MEDIA_HOOK', () => {
+  it('carries no backtick, so the template literal cannot be closed early', () => {
+    // Written four times during this feature and caught by the compiler each
+    // time, but only because the break happened to be syntactic. A backtick in
+    // a comment closes the literal the hook lives in, and the failure that
+    // follows has nothing to do with the line that caused it. Cheaper to assert.
+    expect(MEDIA_HOOK).not.toContain('`')
+  })
+
+  it('does nothing at all in a subframe', () => {
+    // Document-start injection reaches every frame, but the bridge it reports
+    // through is exposed by a preload that runs in the main frame alone. A
+    // subframe used to wait for it forever, twenty wakeups a second, per
+    // iframe, on the one Pod exempt from background throttling.
+    const h = run({
+      elements: [{ paused: false, duration: 10, currentTime: 1 }],
+      metadata: { title: 'an ad in an iframe' },
+      playbackState: 'playing',
+      subframe: true
+    })
+    expect(h.reports).toHaveLength(0)
+    expect(h.timers).toHaveLength(0)
+    expect(h.command).toBeNull()
+  })
+
+  it('carries no control characters', () => {
+    // A stray NUL reached this file through an escaping mistake and was
+    // committed: valid inside a JS string, invisible in a diff, and enough to
+    // make grep call the source binary. Scanned by code point rather than with
+    // a regex, which cannot hold the characters it is looking for.
+    const stray = [...MEDIA_HOOK].find((ch) => {
+      const code = ch.charCodeAt(0)
+      // Newline, carriage return and tab are the only ones that belong here.
+      return code < 32 && code !== 10 && code !== 13 && code !== 9
+    })
+    expect(stray).toBeUndefined()
+  })
+
   it('runs and reports without throwing', () => {
     // The regression test for the deleted-variable bug: any ReferenceError in
     // report() lands here, where nothing in the app would have surfaced it.

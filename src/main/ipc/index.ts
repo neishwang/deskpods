@@ -547,7 +547,6 @@ export function registerIpc(
   // What it is playing is RUNTIME state, like unread: derived from the page,
   // never persisted. Only the role itself (`state.musicPodId`) is remembered.
   let report: MediaReport | null = null
-  let media: MediaInfo | null = null
 
   /**
    * What the page last reported, for a Pod that has never been loaded and so
@@ -582,13 +581,23 @@ export function registerIpc(
   /** The sidebar shows no clock, so the position must not reach it: a value
    *  that ticks every second would re-render the rail once a second forever.
    *  The drawer, which does show it, is refreshed unconditionally below. */
+  /** The last key sent to the renderer, for the comparison in `pushMedia`. */
+  let mediaSent = 'null'
+
   const withoutTime = (info: MediaInfo | null) =>
     info ? JSON.stringify({ ...info, position: 0, duration: 0, volume: 0 }) : 'null'
 
   const pushMedia = () => {
     const next = composeMedia()
-    if (withoutTime(next) !== withoutTime(media)) send(IpcChannels.mediaState, next)
-    media = next
+    // The previous key is kept rather than recomputed: this runs once a second
+    // while music plays, and `withoutTime` spreads a thirteen-field object and
+    // stringifies it, so half of that work was rebuilding a string produced a
+    // second earlier.
+    const key = withoutTime(next)
+    if (key !== mediaSent) {
+      mediaSent = key
+      send(IpcChannels.mediaState, next)
+    }
     pushMusicNav()
     // The taskbar overlay says "this app is the one making the sound", or that
     // it would be and has been silenced - but only when there is no unread
@@ -702,23 +711,35 @@ export function registerIpc(
    * that Pod is the one on screen, since it is the only Pod whose links walk
    * you away from what you were doing with no chrome to come back with.
    */
+  /** The last payload sent, so an unchanged one is not sent again. */
+  let musicNavSent = ''
+
   const pushMusicNav = () => {
     if (!overlay || overlay.isDestroyed()) return
     const id = state.musicPodId
     if (!id || pods.activePodId !== id) {
+      if (musicNavSent === 'null') return
+      musicNavSent = 'null'
       overlay.webContents.send(IpcChannels.musicNav, null)
       return
     }
     const { muted: _muted, ...history } = pods.transportOf(id)
     const area = pods.workspace
-    // The square has no entrance animation of its own, so it does not need the
-    // window to have settled first - but it does need the window up.
-    showOverlay()
-    overlay.webContents.send(IpcChannels.musicNav, {
+    const payload = {
       x: Math.round(area.x),
       y: Math.round(area.y),
       ...history
-    })
+    }
+    // Nothing in this payload changes once a second, but `pushMedia` runs that
+    // often: sending it anyway woke the overlay, forced a layout to re-measure
+    // its hit area, and sent an answer back, every second, to move nothing.
+    const key = JSON.stringify(payload)
+    if (key === musicNavSent) return
+    musicNavSent = key
+    // The square has no entrance animation of its own, so it does not need the
+    // window to have settled first - but it does need the window up.
+    showOverlay()
+    overlay.webContents.send(IpcChannels.musicNav, payload)
   }
 
   const hideMediaPanel = () => {

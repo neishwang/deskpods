@@ -37,11 +37,10 @@ const BY_URL = {
 const entries = Object.entries(BY_URL)
   .map(
     ([url, icon]) =>
-      `  '${url}': {\n` +
-      `    title: '${icon.title}',\n` +
-      `    hex: '#${icon.hex}',\n` +
-      `    path: '${icon.path}'\n` +
-      `  }`
+      `  '${url}': {
+    hex: '#${icon.hex}',
+    path: '${icon.path}'
+  }`
   )
   .join(',\n')
 
@@ -66,7 +65,6 @@ const out = `/**
  */
 
 export interface BrandMark {
-  title: string
   /** The brand's own colour, '#RRGGBB'. */
   hex: string
   /** Single path, drawn in a 24x24 viewBox. */

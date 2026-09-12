@@ -83,8 +83,11 @@ export function createOverlayWindow(parent: BrowserWindow): BrowserWindow | null
  * the pointer sits inside one, so everything else still passes straight to the
  * Pod underneath. Sampling rather than `setIgnoreMouseEvents(true, { forward:
  * true })` on purpose - forwarding move events is what made the cursor flicker
- * on Windows. The timer only runs while something is clickable (a few seconds
- * per notification), never while idle.
+ * on Windows. The timer only runs while a region is reported, and never while
+ * idle - but "a few seconds per notification" no longer describes all of it:
+ * the music Pod's history square is reported for as long as that Pod is the one
+ * on screen, so browsing a music service samples the cursor for as long as you
+ * are looking at it. Withdrawn the moment another Pod is shown.
  *
  * Returns the setter to call with the reported regions.
  */
