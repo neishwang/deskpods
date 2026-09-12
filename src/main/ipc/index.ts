@@ -611,17 +611,18 @@ export function registerIpc(
     pushMedia()
   }
 
-  const setMusicPod = (id: PodId | null) => {
+  const setMusicPod = (id: PodId | null, enableAdblock = false) => {
     const next = id && state.pods.some((p) => p.id === id) ? id : null
     if ((state.musicPodId ?? null) === next) return
     state.musicPodId = next
     report = null
-    // Ad blocking is NOT turned on here, though it used to be: a music service
-    // is the one Pod known in advance to show ads, which made it look like the
-    // obvious default. It broke YouTube - the player stays black and the page
-    // reports a script declared twice - and a Pod whose whole job is playing
-    // media silently failing to play media is a bad trade for hiding ads. It
-    // stays available per Pod, from the Pod's own menu, as a choice.
+    // Only on the way in, and only when the caller asked: a music service is
+    // the one Pod known in advance to show ads. It stays an ordinary per-Pod
+    // setting afterwards, so the Pod's own menu can turn it back off.
+    if (next && enableAdblock) {
+      const pod = state.pods.find((p) => p.id === next)
+      if (pod) pod.settings = { ...pod.settings, adblock: true }
+    }
     // Whatever the old Pod was playing is no longer what the player drives.
     pushMedia()
     pods.setMusicPod(next)
@@ -1099,8 +1100,8 @@ export function registerIpc(
     pods.setOverlay(active)
   })
 
-  handle(IpcChannels.setMusicPod, (_e, id: PodId | null) => {
-    setMusicPod(id)
+  handle(IpcChannels.setMusicPod, (_e, id: PodId | null, options?: { enableAdblock?: boolean }) => {
+    setMusicPod(id, options?.enableAdblock === true)
   })
 
   handle(IpcChannels.setMusicService, (_e, url: string, name?: string): void => {
