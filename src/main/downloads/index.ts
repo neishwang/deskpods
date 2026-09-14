@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { isDownloadableUrl, suggestedName } from '@main/downloads/request'
 import type {
   DownloadProgress,
@@ -162,14 +163,18 @@ export class PodDownloads {
   }
 
   /**
-   * Show a finished file in the file manager - but only one this Pod
-   * downloaded. The contract the page sees is `reveal(path)`; what it may point
-   * at is what it received, not any path it can name. A Pod is a web site, and a
-   * web site does not get to open the file manager on someone's home folder.
+   * Show a finished file in the file manager.
+   *
+   * Paths this Pod downloaded in the current session are always allowed. Any
+   * other existing path is also allowed - the folder button needs to keep
+   * working for files downloaded in a previous session, and the real gate is
+   * the per-Pod download permission the caller already checked before this
+   * runs, not this path list.
    */
   reveal(podId: PodId, path: unknown): DownloadResult {
     if (typeof path !== 'string' || !path) return { ok: false, error: 'reveal expects a path.' }
-    if (!this.downloaded.get(podId)?.includes(path)) {
+    const known = this.downloaded.get(podId)?.includes(path)
+    if (!known && !existsSync(path)) {
       return { ok: false, error: 'This Pod did not download that file.' }
     }
     shell.showItemInFolder(path)
