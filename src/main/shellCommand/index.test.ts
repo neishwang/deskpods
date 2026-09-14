@@ -61,6 +61,23 @@ describe('isAllowedCommand', () => {
     expect(isAllowedCommand('dotnet `whoami`', ['dotnet'])).toBe(false)
     expect(isAllowedCommand('dotnet build\ndel /f C:\\x', ['dotnet'])).toBe(false)
   })
+
+  it('allows operators that live inside quoted arguments', () => {
+    // sqlcmd -Q carries SQL with `;` and `|`; refusing those made "Allow sqlcmd"
+    // grant the name and still reject the call.
+    expect(
+      isAllowedCommand('sqlcmd -S "L339\\MSSQL2025" -E -Q "SET NOCOUNT ON; SELECT 1"', ['sqlcmd'])
+    ).toBe(true)
+    expect(
+      isAllowedCommand("powershell -NoProfile -Command 'Get-ChildItem | Select-Object -First 1'", [
+        'powershell'
+      ])
+    ).toBe(true)
+  })
+
+  it('still refuses a chain after a quoted argument', () => {
+    expect(isAllowedCommand('sqlcmd -Q "SELECT 1" & del /f C:\\x', ['sqlcmd'])).toBe(false)
+  })
 })
 
 describe('runCommand', () => {

@@ -28,11 +28,18 @@ describe('openPathIn', () => {
     expect(openPath).toHaveBeenCalledWith(result.path)
   })
 
-  it('refuses climbing out of the granted folder, and absolute paths', async () => {
+  it('refuses climbing out of the granted folder, and foreign absolute paths', async () => {
     expect((await openPathIn(root, '../elsewhere.txt')).ok).toBe(false)
     expect((await openPathIn(root, 'C:Windows\notepad.exe')).ok).toBe(false)
     expect((await openPathIn(root, '/etc/passwd')).ok).toBe(false)
     expect(openPath).not.toHaveBeenCalled()
+  })
+
+  it('accepts an absolute path that still sits inside the granted folder', async () => {
+    const absolute = join(root, 'job.txucmd')
+    const result = await openPathIn(root, absolute)
+    expect(result.ok).toBe(true)
+    expect(openPath).toHaveBeenCalledWith(result.path)
   })
 
   it('refuses an empty or non-string path', async () => {

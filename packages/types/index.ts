@@ -29,7 +29,9 @@ export interface PodExecAccess {
   /** Program names the Pod may run (first word of the command line, without
    *  folder or `.exe`, lowercased). Absent or empty means every command was
    *  allowed. With a list, a command line chaining another one (`&`, `|`, `;`,
-   *  redirections…) is refused whatever it starts with. */
+   *  redirections…) outside quotes is refused even when it starts with an
+   *  allowed name; operators inside quoted arguments (e.g. SQL in
+   *  `sqlcmd -Q "…;…"`) do not count. */
   allow?: string[]
 }
 
@@ -783,6 +785,11 @@ export const IpcChannels = {
    *  and only an UNRESTRICTED one - the associated program cannot be named in
    *  advance, so an allow-list cannot vouch for it. */
   podOpenPath: 'pods:openPath',
+  /** Pod page -> main: native file / folder picker (absolute paths). WinForms
+   *  via exec is invisible under windowsHide; Electron's dialog is the only
+   *  reliable way for a Pod to let the user choose a path. */
+  podPickFile: 'pods:pickFile',
+  podPickFolder: 'pods:pickFolder',
   /** Pod page -> main: open / drive / close a background page. */
   podOpenPage: 'pods:openPage',
   podRunScript: 'pods:runScript',

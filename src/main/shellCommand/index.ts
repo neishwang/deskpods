@@ -27,10 +27,46 @@ const MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 
 /**
  * Characters that chain a second command onto the first. When the Pod holds an
- * allow-list, they are refused outright: `dotnet & del /f C:\x` starts with an
- * allowed name and is not an allowed command.
+ * allow-list, they are refused outside of quotes: `dotnet & del /f C:\x` starts
+ * with an allowed name and is not an allowed command.
+ *
+ * Quotes matter: `sqlcmd -Q "SET NOCOUNT ON; SELECT 1"` is one program with an
+ * argument, not a chain - treating every `;`/`|` in the line as an operator
+ * made "Allow sqlcmd" grant the name and still refuse the call.
  */
 const SHELL_OPERATORS = /[&|;<>`\n\r]|\$\(/
+
+/**
+ * Drop quoted spans (double and single) so operator detection looks at what the
+ * shell would treat as structure, not at argument text. Doubled quotes inside a
+ * span (`""` / `''`) stay inside it.
+ */
+export function withoutQuotedSpans(command: string): string {
+  let out = ''
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]
+    if (c !== '"' && c !== "'") {
+      out += c
+      continue
+    }
+    const quote = c
+    i++
+    while (i < command.length) {
+      if (command[i] === quote) {
+        // Doubled quote = escaped quote inside the span.
+        if (command[i + 1] === quote) {
+          i += 2
+          continue
+        }
+        break
+      }
+      i++
+    }
+    // Keep a spacer so tokens on either side do not merge.
+    out += ' '
+  }
+  return out
+}
 
 /** True when the page sent something that can be run at all. */
 export function isValidCommand(command: unknown): command is string {
@@ -58,12 +94,12 @@ export function commandName(command: string): string {
  *
  * An absent or empty list means the user allowed every command, so anything
  * passes. With a list, both the program name AND the absence of shell operators
- * are required - otherwise the list would only decide how a command line
- * starts, not what it does.
+ * outside quotes are required - otherwise the list would only decide how a
+ * command line starts, not what it does.
  */
 export function isAllowedCommand(command: string, allow?: string[]): boolean {
   if (!allow || allow.length === 0) return true
-  if (SHELL_OPERATORS.test(command)) return false
+  if (SHELL_OPERATORS.test(withoutQuotedSpans(command))) return false
 
   const name = commandName(command)
   return name.length > 0 && allow.includes(name)

@@ -89,6 +89,12 @@ contextBridge.exposeInMainWorld('__deskpods', {
   // Resolves with { ok, path, error? }.
   openPath: (path: unknown) => ipcRenderer.invoke('pods:openPath', { path }),
 
+  // Native file / folder pickers. PowerShell WinForms dialogs never appear
+  // under DeskPods (exec uses windowsHide). Resolves with an absolute path or
+  // null when the user cancels.
+  pickFile: (options?: unknown) => ipcRenderer.invoke('pods:pickFile', options ?? {}),
+  pickFolder: (options?: unknown) => ipcRenderer.invoke('pods:pickFolder', options ?? {}),
+
   // Drive a site in a hidden page on this Pod's session: open it once, run as
   // many scripts as needed against that same loaded document, then close it.
   // openPage resolves with { ok, id, url, error? }; runScript with

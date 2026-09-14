@@ -35,6 +35,7 @@ import {
   app,
   type BrowserWindow,
   clipboard,
+  dialog,
   Menu,
   type MenuItemConstructorOptions,
   type Session,
@@ -534,6 +535,44 @@ export class PodManager {
       }
     )
 
+    // Native pickers: WinForms via exec never appears (windowsHide). Parent is
+    // the DeskPods window so the dialog stays on top of the Pod.
+    wc.ipc.handle(
+      IpcChannels.podPickFile,
+      async (
+        _e,
+        options?: {
+          title?: string
+          defaultPath?: string
+          filters?: Array<{ name: string; extensions: string[] }>
+        }
+      ): Promise<string | null> => {
+        const result = await dialog.showOpenDialog(this.window, {
+          title: options?.title || 'Choose a file',
+          defaultPath: options?.defaultPath,
+          properties: ['openFile'],
+          filters: options?.filters?.length
+            ? options.filters
+            : [{ name: 'All Files', extensions: ['*'] }]
+        })
+        if (result.canceled) return null
+        return result.filePaths[0] ?? null
+      }
+    )
+
+    wc.ipc.handle(
+      IpcChannels.podPickFolder,
+      async (_e, options?: { title?: string; defaultPath?: string }): Promise<string | null> => {
+        const result = await dialog.showOpenDialog(this.window, {
+          title: options?.title || 'Choose a folder',
+          defaultPath: options?.defaultPath,
+          properties: ['openDirectory']
+        })
+        if (result.canceled) return null
+        return result.filePaths[0] ?? null
+      }
+    )
+
     wc.ipc.handle(IpcChannels.podListDir, (_e, request: ListDirRequest): Promise<ListDirResult> => {
       const handler = this.onListDirRequest
       if (!handler)
@@ -771,6 +810,8 @@ export class PodManager {
     )
     wc.ipc.handle(IpcChannels.podExecKill, () => Promise.resolve({ ok: false, error: why }))
     wc.ipc.handle(IpcChannels.podOpenPath, () => Promise.resolve({ ok: false, error: why }))
+    wc.ipc.handle(IpcChannels.podPickFile, () => Promise.resolve(null))
+    wc.ipc.handle(IpcChannels.podPickFolder, () => Promise.resolve(null))
     wc.ipc.handle(IpcChannels.podListDir, () =>
       Promise.resolve({ ok: false, entries: [], error: why })
     )

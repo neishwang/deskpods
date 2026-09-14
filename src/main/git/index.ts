@@ -23,15 +23,16 @@ const MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 
 /**
  * Working directory for a request, or null when it would escape `root`.
- * Only relative paths are accepted, and the result must still sit inside the
- * granted folder once resolved (so `..`, symlink-ish tricks and absolute paths
- * are all refused).
+ *
+ * Relative paths are resolved under `root`. Absolute paths are accepted when
+ * they still land inside the granted folder - a page that already knows the
+ * full Windows path (worktrees, downloads) should not have to recompute a
+ * relative form. Escapes (`..`, another drive) stay refused.
  */
 export function resolveWorkingDirectory(root: string, requested?: string): string | null {
   if (!requested) return root
-  if (isAbsolute(requested)) return null
 
-  const target = resolve(root, requested)
+  const target = isAbsolute(requested) ? resolve(requested) : resolve(root, requested)
   const inside = relative(root, target)
   if (inside.startsWith('..') || isAbsolute(inside)) return null
   return target

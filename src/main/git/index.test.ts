@@ -61,6 +61,10 @@ describe('resolveInside', () => {
     expect(resolveInside(root)).toBeTruthy()
   })
 
+  it('accepts an absolute path that still sits inside the granted folder', () => {
+    expect(resolveInside(root, join(root, 'sub'))).toBeTruthy()
+  })
+
   it('still refuses the lexical escapes', () => {
     expect(resolveInside(root, '..')).toBeNull()
     expect(resolveInside(root, 'sub/../..')).toBeNull()
