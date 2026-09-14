@@ -115,9 +115,10 @@ rather than stacking prompts.
 
 ### What is enforced
 
-- **The folder.** Commands run in the folder you picked. `options.cwd` may only
-  be a relative path that stays inside it; absolute paths and anything climbing
-  out with `..` are refused.
+- **The folder.** Commands run in the folder you picked. `options.cwd` may be
+  relative to it, or an absolute path - but either way it must resolve inside
+  it; anything climbing out with `..`, another drive, or a path outside the
+  folder is refused.
 - **No shell.** Arguments are passed as an array straight to the process, so
   `&&`, `|`, backticks and the rest are inert - they reach git as literal
   arguments and it complains about them.
@@ -252,8 +253,10 @@ The prompt shows the exact line the page wants to run and offers two grants:
 - **Allow “dotnet”** - only that program. DeskPods asks again the first time the
   Pod reaches for another one, and adds it to the list if you agree. While a
   list is in force, a line chaining a second command (`&`, `&&`, `|`, `;`, a
-  redirection, `$(…)`, a backquote or a newline) is refused whatever it starts
-  with, so `dotnet & rmdir /s /q data` does not slip through.
+  redirection, `$(…)`, a backquote or a newline) outside quotes is refused
+  whatever it starts with, so `dotnet & rmdir /s /q data` does not slip
+  through - an operator sitting inside a quoted argument (`sqlcmd -Q "SET
+  NOCOUNT ON; SELECT 1"`) does not count against the command.
 - **Allow every command** - the Pod may run anything you can run. A Pod is a web
   site; this hands it the machine, not a folder.
 
@@ -270,8 +273,8 @@ const r = await window.__deskpods.openPath('imports/job.txucmd')
 // { ok, path, error? } - `path` is the absolute file actually opened
 ```
 
-The path is relative to the granted folder and confined to it exactly like
-`readFile`: absolute paths, `..` and links pointing elsewhere are refused. A
+The path may be relative to the granted folder or absolute, and is confined to
+it exactly like `readFile`: `..` and links pointing elsewhere are refused. A
 missing file is an `ok: false` answer rather than a Windows dialog appearing
 over the Pod with nothing for the page to read.
 
@@ -282,6 +285,26 @@ leave the granted folder, which makes this the narrower door. With a list in
 force the call is refused: a list narrows by program name, and which program
 opens a file is decided by the machine's file association, so honouring the list
 would quietly turn *only `dotnet`* into *anything with a file extension*.
+
+### Picking a file or folder
+
+A page cannot show its own native picker. `pickFile` and `pickFolder` open
+Electron's own dialog and hand back the absolute path the user chose, or
+`null` if they cancelled - the one WinForms dialog `exec` cannot show, since a
+process launched with `windowsHide` never draws a window of its own.
+
+```js
+const file = await window.__deskpods.pickFile({
+  title: 'Choose a backup',
+  filters: [{ name: 'Archives', extensions: ['zip', '7z'] }]
+})
+const folder = await window.__deskpods.pickFolder({ title: 'Choose a destination' })
+```
+
+Both resolve straight to the path (or `null`), no `{ ok, ... }` wrapper. There
+is no permission prompt and no folder confinement: the dialog is native
+Windows UI the user drives themselves, exactly like a browser's own file
+input, so there is nothing for DeskPods to gate.
 
 ## Driving another site from a Pod
 
@@ -393,9 +416,10 @@ Practical limits: `http`/`https` only (a `blob:` belongs to the page's own
 context, and `file://` would make this a way to copy your disk around), at most
 4 downloads at a time per Pod, and the file name a page suggests is reduced to a
 bare name before it is offered in the dialog - the folder is never the page's
-choice. `reveal(path)` only opens files that Pod actually downloaded; a Pod is a
-web site, and a web site does not get to open your file manager wherever it
-likes.
+choice. `reveal(path)` shows any path that exists on disk (the folder button
+has to keep working for files downloaded in a previous session, not only the
+current one) - the actual gate is Download Access itself: a Pod without that
+permission cannot call `reveal` at all.
 
 A download DeskPods did not start - a link you clicked in a page, *Save Image
 As…* - behaves as before and is reported to no page.
@@ -450,8 +474,8 @@ Three bundles plus a shared package:
   Pod, native menus, notifications, persistence, the git / command / file /
   open / download bridges and the background pages a Pod can drive.
 - `src/preload` - two bridges: `window.deskpods` for the chrome, and a minimal
-  `window.__deskpods` (notifications, git, commands, files, downloads,
-  background pages) injected into Pod pages.
+  `window.__deskpods` (notifications, git, commands, files, native pickers,
+  downloads, background pages) injected into Pod pages.
 - `src/renderer` - the React chrome (sidebar, dialogs, find bar), plus a second
   tiny renderer in `src/overlay` for what must paint above the Pods.
 
